@@ -100,6 +100,10 @@ export function createBot(store: Store, bridge: ExtensionBridge): Bot {
     );
   });
 
-  bot.catch((err) => console.error("[bot]", err.error));
+  // Пользователь не должен остаться без ответа, если что-то упало
+  bot.catch(async (err) => {
+    console.error("[bot]", err.error);
+    await err.ctx.reply("⚠️ Что-то пошло не так. Попробуйте ещё раз.").catch(() => {});
+  });
   return bot;
 }
