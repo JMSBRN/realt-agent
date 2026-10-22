@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Realt Agent</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <h1>Realt Agent</h1>
+
+    <form id="login" hidden>
+      <p class="muted">Войдите тем же email, что и на сайте.</p>
+      <input id="email" type="email" placeholder="you@example.com" required />
+      <input id="code" inputmode="numeric" placeholder="Код из письма" hidden />
+      <button id="submit">Получить код</button>
+    </form>
+
+    <section id="account" hidden>
+      <p id="who"></p>
+      <p id="state"></p>
+      <p class="muted">Держите Chrome открытым — поиск запускается сам, когда вы пишете боту.</p>
+      <button id="logout" class="secondary">Выйти</button>
+    </section>
+
+    <p id="error" class="error"></p>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

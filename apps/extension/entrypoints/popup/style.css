@@ -1,0 +1,51 @@
+:root {
+  color-scheme: light dark;
+  font: 14px/1.4 system-ui, sans-serif;
+}
+body {
+  width: 280px;
+  margin: 0;
+  padding: 16px;
+}
+h1 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+form,
+section {
+  display: grid;
+  gap: 8px;
+}
+input,
+button {
+  font: inherit;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #a1a1aa;
+  background: transparent;
+  color: inherit;
+}
+button {
+  border: 0;
+  background: #059669;
+  color: #fff;
+  cursor: pointer;
+}
+button.secondary {
+  background: transparent;
+  border: 1px solid #a1a1aa;
+  color: inherit;
+}
+button:disabled {
+  opacity: 0.5;
+}
+p {
+  margin: 0;
+}
+.muted {
+  color: #71717a;
+}
+.error {
+  color: #dc2626;
+  margin-top: 8px;
+}

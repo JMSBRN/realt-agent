@@ -1,0 +1,11 @@
+node_modules
+.next
+.output
+.wxt
+.turbo
+dist
+*.log
+.env
+.env.local
+.DS_Store
+supabase/.temp
