@@ -22,13 +22,16 @@ export async function deliver(api: Api, store: Store, task: Task, result: TaskRe
     return;
   }
   if (result.status === "failed") {
-    if (!task.only_new) await api.sendMessage(chatId, "⚠️ Поиск не удался. Попробуйте ещё раз чуть позже.");
+    console.error(`[task] ${task.id} не удалась: ${result.error}`);
+    if (!task.only_new) await api.sendMessage(chatId, `⚠️ Поиск не удался: ${result.error.slice(0, 300)}`);
     return;
   }
 
   const listings = selectListings(store, task, result.items);
+  console.log(`[task] ${task.id}: просмотрено ${result.scanned ?? "?"}, подходит ${listings.length}`);
   if (!listings.length) {
-    if (!task.only_new) await api.sendMessage(chatId, "Ничего не нашлось. Попробуйте расширить условия.");
+    const scanned = result.scanned != null ? `Просмотрел ${result.scanned} объявлений на realt.by — ` : "";
+    if (!task.only_new) await api.sendMessage(chatId, `${scanned}подходящих нет. Попробуйте расширить условия.`);
     return;
   }
 

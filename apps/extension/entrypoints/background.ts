@@ -57,7 +57,7 @@ export default defineBackground(() => {
   async function runTask(id: string, payload: TaskPayload) {
     let result: TaskResult;
     try {
-      result = { status: "done", items: await scrapeRealt(payload) };
+      result = { status: "done", ...(await scrapeRealt(payload)) };
     } catch (e) {
       result = e instanceof CaptchaError ? { status: "captcha" } : { status: "failed", error: String(e) };
     }

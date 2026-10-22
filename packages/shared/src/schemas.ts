@@ -54,7 +54,8 @@ export type TaskStatus = "queued" | "running" | "done" | "captcha" | "failed";
 
 /** То, что расширение отправляет на сервер по итогам задачи. */
 export const TaskResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("done"), items: z.array(ListingSchema).max(500) }),
+  // scanned — сколько объявлений расширение просмотрело до фильтрации
+  z.object({ status: z.literal("done"), items: z.array(ListingSchema).max(500), scanned: z.number().optional() }),
   z.object({ status: z.literal("captcha") }),
   z.object({ status: z.literal("failed"), error: z.string().max(2000) }),
 ]);

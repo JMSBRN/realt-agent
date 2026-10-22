@@ -57,7 +57,17 @@ function findPrices(t: string, rate: number): { min: number | null; max: number 
   const cur = max?.[3] ?? min?.[3];
   const price = (m: RegExpMatchArray | null) =>
     m ? toUsd(toNumber(m[1]!, m[2] ?? mult), m[3] ?? cur, rate) : null;
-  return { min: price(min), max: price(max) };
+  if (min || max) return { min: price(min), max: price(max) };
+
+  // Число без «до/от» («80000», «40к $») считаем максимальной ценой.
+  // «2к» — это комнаты, а не 2000, поэтому с «к» берём только числа от 10.
+  const bare = new RegExp(String.raw`(?<![\d.,])${NUM}${MULT}${CUR}${notArea}`, "g");
+  for (const m of t.matchAll(bare)) {
+    if (/^[кk]/.test(m[2] ?? "") && Number(m[1]) < 10) continue;
+    const usd = toUsd(toNumber(m[1]!, m[2]), m[3], rate);
+    if (usd >= 100) return { min: null, max: usd };
+  }
+  return { min: null, max: null };
 }
 
 export function simpleParse(text: string, usdBynRate: number): ParseResult {

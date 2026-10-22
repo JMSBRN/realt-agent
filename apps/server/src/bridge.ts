@@ -72,11 +72,13 @@ export class ExtensionBridge {
   private async handleMessage(raw: string) {
     const msg = JSON.parse(raw);
     if (msg?.type !== "result" || typeof msg.id !== "string") return; // hello / ping
-    const parsed = TaskResultSchema.safeParse(msg.result);
-    if (!parsed.success) return console.warn("[bridge] некорректный результат", parsed.error.message);
     const task = this.store.task(msg.id);
     if (!task || task.status !== "running") return;
-    const result = parsed.data;
+    const parsed = TaskResultSchema.safeParse(msg.result);
+    if (!parsed.success) console.warn("[bridge] некорректный результат", parsed.error.message);
+    const result: TaskResult = parsed.success
+      ? parsed.data
+      : { status: "failed", error: `расширение прислало данные в неожиданном формате: ${parsed.error.message.slice(0, 200)}` };
     this.store.setTaskStatus(task.id, result.status, result.status === "failed" ? result.error : null);
     await this.onResult(task, result);
   }

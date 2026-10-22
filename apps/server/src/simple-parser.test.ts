@@ -25,6 +25,10 @@ test("разные записи цены", () => {
   assert.equal(p("куплю квартиру до 0,5 млн")?.priceMaxUsd, 500000);
   assert.equal(p("снять до 1500 руб")?.priceMaxUsd, 500); // BYN → USD по курсу 3
   assert.equal(p("снять до 600")?.priceMaxUsd, 600);
+  assert.equal(p("80000\nкупить")?.priceMaxUsd, 80000);
+  assert.equal(p("купить двушку 70к $")?.priceMaxUsd, 70000);
+  assert.equal(p("купить 2к")?.priceMaxUsd, null); // «2к» — комнаты
+  assert.equal(p("купить 1к от 30 м2")?.priceMaxUsd, null);
   const range = p("купить от 30 до 50 тыс");
   assert.equal(range?.priceMinUsd, 30000);
   assert.equal(range?.priceMaxUsd, 50000);

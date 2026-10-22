@@ -18,6 +18,8 @@ const ENOUGH_MATCHES = 30;
 
 interface PageData {
   blocked: boolean;
+  hasData: boolean;
+  title: string;
   objects: RealtRawObject[];
   totalCount: number;
   pageSize: number;
@@ -38,11 +40,20 @@ async function readRealtPage(): Promise<PageData> {
   const el = document.getElementById("__NEXT_DATA__");
   if (!el?.textContent) {
     const text = (document.body?.innerText ?? "").slice(0, 3000);
-    return { blocked: /робот|captcha|доступ ограничен|подтвердите/i.test(text), objects: [], totalCount: 0, pageSize: 0 };
+    return {
+      blocked: /робот|captcha|доступ ограничен|подтвердите/i.test(text),
+      hasData: false,
+      title: document.title,
+      objects: [],
+      totalCount: 0,
+      pageSize: 0,
+    };
   }
   const props = JSON.parse(el.textContent)?.props?.pageProps ?? {};
   return {
     blocked: false,
+    hasData: Array.isArray(props.objects),
+    title: document.title,
     objects: props.objects ?? [],
     totalCount: props.pagination?.totalCount ?? 0,
     pageSize: props.pagination?.pageSize ?? 0,
@@ -66,11 +77,12 @@ function waitForComplete(tabId: number, timeoutMs = 45_000): Promise<void> {
 }
 
 /** Открывает выдачу realt.by в фоновой вкладке, листает страницы и возвращает подходящие объявления. */
-export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<Listing[]> {
+export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<{ items: Listing[]; scanned: number }> {
   const tab = await browser.tabs.create({ url: "about:blank", active: false });
   const tabId = tab.id!;
   let keepTab = false;
   const byId = new Map<string, Listing>();
+  let scanned = 0;
 
   try {
     for (let page = 1; page <= maxPages; page++) {
@@ -88,6 +100,12 @@ export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<Li
         await browser.tabs.update(tabId, { active: true });
         throw new CaptchaError("captcha");
       }
+      if (!data.hasData) {
+        // Страница открылась, но без списка объявлений: сайт изменился или показал что-то другое
+        throw new Error(`на странице нет списка объявлений (заголовок: «${data.title}»)`);
+      }
+      console.log(`[realt] стр. ${page}: ${data.objects.length} объявлений из ${data.totalCount}`);
+      scanned += data.objects.length;
 
       for (const raw of data.objects) {
         const listing = mapRealtObject(raw, params.deal);
@@ -101,5 +119,5 @@ export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<Li
   } finally {
     if (!keepTab) await browser.tabs.remove(tabId).catch(() => {});
   }
-  return [...byId.values()];
+  return { items: [...byId.values()], scanned };
 }
