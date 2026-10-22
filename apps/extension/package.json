@@ -11,8 +11,7 @@
     "postinstall": "wxt prepare"
   },
   "dependencies": {
-    "@realt-agent/shared": "workspace:*",
-    "@supabase/supabase-js": "^2.118.0"
+    "@realt-agent/shared": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^5.8.0",

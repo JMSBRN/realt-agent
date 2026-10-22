@@ -49,3 +49,12 @@ p {
   color: #dc2626;
   margin-top: 8px;
 }
+label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #71717a;
+}
+#state {
+  margin-bottom: 12px;
+}

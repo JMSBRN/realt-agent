@@ -1,113 +1,83 @@
-import type { RealtimeChannel } from "@supabase/supabase-js";
-import type { TaskPayload, TaskResult } from "@realt-agent/shared";
+import type { ExtensionMessage, ServerMessage, TaskPayload, TaskResult } from "@realt-agent/shared";
 import { browser } from "wxt/browser";
 import { CaptchaError, scrapeRealt } from "@/lib/scrape-realt";
-import { API_URL, createSupabase } from "@/lib/supabase";
-
-interface TaskRow {
-  id: string;
-  payload: TaskPayload;
-  status: string;
-}
+import { loadSettings } from "@/lib/settings";
 
 export default defineBackground(() => {
-  const sb = createSupabase(true);
-  let userId: string | null = null;
-  let channel: RealtimeChannel | null = null;
-  let subscribed = false;
+  let ws: WebSocket | null = null;
+  let lastError = "";
   let queue: Promise<void> = Promise.resolve(); // один браузер — одна задача за раз
   const taken = new Set<string>();
 
+  const isOpen = () => ws?.readyState === WebSocket.OPEN;
+
+  function send(msg: ExtensionMessage) {
+    if (isOpen()) ws!.send(JSON.stringify(msg));
+  }
+
   function setBadge() {
-    browser.action.setBadgeText({ text: userId ? (subscribed ? "ON" : "…") : "" });
-    browser.action.setBadgeBackgroundColor({ color: subscribed ? "#059669" : "#9ca3af" });
+    browser.action.setBadgeText({ text: isOpen() ? "ON" : "OFF" });
+    browser.action.setBadgeBackgroundColor({ color: isOpen() ? "#059669" : "#9ca3af" });
   }
 
-  /** Подписка на новые задачи пользователя; вызывается при старте, входе/выходе и раз в минуту. */
-  async function sync() {
-    const {
-      data: { session },
-    } = await sb.auth.getSession();
-    const uid = session?.user.id ?? null;
-
-    if (uid !== userId || !channel) {
-      if (channel) await sb.removeChannel(channel);
-      channel = null;
-      subscribed = false;
-      userId = uid;
-      if (uid) {
-        channel = sb
-          .channel(`tasks:${uid}`)
-          .on(
-            "postgres_changes",
-            { event: "INSERT", schema: "public", table: "tasks", filter: `user_id=eq.${uid}` },
-            (change) => enqueue(change.new as TaskRow),
-          )
-          .subscribe((status) => {
-            subscribed = status === "SUBSCRIBED";
-            setBadge();
-          });
-      }
+  /** Подключается к серверу, если ещё не подключены. Вызывается при старте, из popup и раз в минуту. */
+  async function connect(force = false) {
+    if (!force && ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    ws?.close();
+    const { serverUrl, token } = await loadSettings();
+    if (!token) {
+      lastError = "Укажите токен сервера";
+      setBadge();
+      return;
     }
-    setBadge();
-    if (!userId) return;
-
-    await sb
-      .from("extension_sessions")
-      .upsert({ user_id: userId, last_seen: new Date().toISOString(), version: browser.runtime.getManifest().version });
-    // Подхватываем задачи, пришедшие, пока браузер был закрыт или worker спал
-    const { data } = await sb.from("tasks").select("id, payload, status").eq("status", "queued").order("created_at");
-    for (const task of data ?? []) enqueue(task as TaskRow);
+    const socket = new WebSocket(`${serverUrl}?token=${encodeURIComponent(token)}`);
+    ws = socket;
+    socket.onopen = () => {
+      lastError = "";
+      send({ type: "hello", version: browser.runtime.getManifest().version });
+      setBadge();
+    };
+    socket.onclose = (e) => {
+      if (ws === socket) ws = null;
+      lastError = e.code === 4401 ? "Неверный токен" : "Сервер недоступен";
+      setBadge();
+    };
+    socket.onmessage = (e) => {
+      const msg = JSON.parse(e.data) as ServerMessage;
+      if (msg.type === "task") enqueue(msg.id, msg.payload);
+    };
   }
 
-  function enqueue(task: TaskRow) {
-    if (task.status !== "queued" || taken.has(task.id)) return;
-    taken.add(task.id);
-    queue = queue.then(() => runTask(task)).catch((e) => console.error("task failed", task.id, e));
+  function enqueue(id: string, payload: TaskPayload) {
+    if (taken.has(id)) return;
+    taken.add(id);
+    queue = queue.then(() => runTask(id, payload)).catch((e) => console.error("task failed", id, e));
   }
 
-  async function runTask(task: TaskRow) {
-    // Забираем задачу атомарно: если её уже взял другой браузер, пропускаем
-    const { data: claimed } = await sb
-      .from("tasks")
-      .update({ status: "running", started_at: new Date().toISOString() })
-      .eq("id", task.id)
-      .eq("status", "queued")
-      .select("id");
-    if (!claimed?.length) return;
-
+  async function runTask(id: string, payload: TaskPayload) {
     let result: TaskResult;
     try {
-      result = { status: "done", items: await scrapeRealt(task.payload) };
+      result = { status: "done", items: await scrapeRealt(payload) };
     } catch (e) {
       result = e instanceof CaptchaError ? { status: "captcha" } : { status: "failed", error: String(e) };
     }
-    await postResult(task.id, result);
+    // Если соединение пропало, сервер вернёт задачу в очередь и пришлёт её снова
+    if (isOpen()) send({ type: "result", id, result });
+    else taken.delete(id);
   }
 
-  async function postResult(taskId: string, result: TaskResult) {
-    const {
-      data: { session },
-    } = await sb.auth.getSession();
-    const res = await fetch(`${API_URL}/api/tasks/${taskId}/result`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token}` },
-      body: JSON.stringify(result),
-    });
-    if (!res.ok) throw new Error(`result upload failed: ${res.status}`);
-  }
+  // Service worker в MV3 засыпает после ~30 с простоя; сообщения по WebSocket его будят (Chrome 116+)
+  setInterval(() => send({ type: "ping" }), 20_000);
+  // Будильник раз в минуту переподключает, если worker всё-таки перезапускался
+  browser.alarms.create("connect", { periodInMinutes: 1 });
+  browser.alarms.onAlarm.addListener(() => connect());
+  browser.runtime.onStartup.addListener(() => connect());
 
-  // Будильник раз в минуту: heartbeat и восстановление подписки после сна service worker
-  browser.alarms.create("sync", { periodInMinutes: 1 });
-  browser.alarms.onAlarm.addListener(() => sync());
-  browser.runtime.onStartup.addListener(() => sync());
-
-  // Сообщения от popup
   browser.runtime.onMessage.addListener((msg: { type: string }, _sender, sendResponse) => {
-    if (msg.type === "auth-changed") sync().then(() => sendResponse({ ok: true }));
-    if (msg.type === "status") sendResponse({ loggedIn: !!userId, subscribed });
+    if (msg.type === "settings-changed") connect(true).then(() => sendResponse({ ok: true }));
+    if (msg.type === "status") sendResponse({ connected: isOpen(), error: lastError });
     return true;
   });
 
-  sync();
+  connect();
 });

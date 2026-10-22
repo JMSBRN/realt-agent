@@ -8,22 +8,21 @@
   </head>
   <body>
     <h1>Realt Agent</h1>
+    <p id="state">…</p>
 
-    <form id="login" hidden>
-      <p class="muted">Войдите тем же email, что и на сайте.</p>
-      <input id="email" type="email" placeholder="you@example.com" required />
-      <input id="code" inputmode="numeric" placeholder="Код из письма" hidden />
-      <button id="submit">Получить код</button>
+    <form id="settings">
+      <label>
+        Адрес сервера
+        <input id="serverUrl" placeholder="ws://127.0.0.1:8765" required />
+      </label>
+      <label>
+        Токен (WS_TOKEN из .env сервера)
+        <input id="token" type="password" required />
+      </label>
+      <button>Сохранить и подключиться</button>
     </form>
 
-    <section id="account" hidden>
-      <p id="who"></p>
-      <p id="state"></p>
-      <p class="muted">Держите Chrome открытым — поиск запускается сам, когда вы пишете боту.</p>
-      <button id="logout" class="secondary">Выйти</button>
-    </section>
-
-    <p id="error" class="error"></p>
+    <p class="muted">Держите Chrome открытым — поиск запускается сам, когда вы пишете боту.</p>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

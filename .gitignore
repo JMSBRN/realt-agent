@@ -9,3 +9,7 @@ dist
 .env.local
 .DS_Store
 supabase/.temp
+*.db
+*.db-shm
+*.db-wal
+*.tsbuildinfo

@@ -1,54 +1,25 @@
 import { browser } from "wxt/browser";
-import { createSupabase } from "@/lib/supabase";
+import { loadSettings, saveSettings } from "@/lib/settings";
 
-const sb = createSupabase(false);
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const serverUrl = $<HTMLInputElement>("serverUrl");
+const token = $<HTMLInputElement>("token");
 
-const form = $<HTMLFormElement>("login");
-const email = $<HTMLInputElement>("email");
-const code = $<HTMLInputElement>("code");
-const submit = $<HTMLButtonElement>("submit");
-const error = $("error");
-
-async function render() {
-  const {
-    data: { session },
-  } = await sb.auth.getSession();
-  form.hidden = !!session;
-  $("account").hidden = !session;
-  if (!session) return;
-  $("who").textContent = `Вы вошли как ${session.user.email}`;
-  const status = (await browser.runtime.sendMessage({ type: "status" })) as { subscribed: boolean };
-  $("state").textContent = status.subscribed ? "🟢 Готов принимать задачи" : "🟡 Подключаюсь…";
+async function renderStatus() {
+  const s = (await browser.runtime.sendMessage({ type: "status" })) as { connected: boolean; error: string };
+  $("state").textContent = s.connected ? "🟢 Подключено к серверу" : `🔴 ${s.error || "Не подключено"}`;
 }
 
-form.addEventListener("submit", async (e) => {
+$<HTMLFormElement>("settings").addEventListener("submit", async (e) => {
   e.preventDefault();
-  error.textContent = "";
-  submit.disabled = true;
-  const res = code.hidden
-    ? await sb.auth.signInWithOtp({ email: email.value, options: { shouldCreateUser: false } })
-    : await sb.auth.verifyOtp({ email: email.value, token: code.value.trim(), type: "email" });
-  submit.disabled = false;
-  if (res.error) {
-    error.textContent = res.error.message;
-    return;
-  }
-  if (code.hidden) {
-    code.hidden = false;
-    email.disabled = true;
-    submit.textContent = "Войти";
-    code.focus();
-    return;
-  }
-  await browser.runtime.sendMessage({ type: "auth-changed" });
-  await render();
+  await saveSettings({ serverUrl: serverUrl.value.trim(), token: token.value.trim() });
+  $("state").textContent = "Подключаюсь…";
+  await browser.runtime.sendMessage({ type: "settings-changed" });
+  // даём соединению установиться
+  setTimeout(renderStatus, 1000);
 });
 
-$("logout").addEventListener("click", async () => {
-  await sb.auth.signOut({ scope: "local" });
-  await browser.runtime.sendMessage({ type: "auth-changed" });
-  await render();
-});
-
-render();
+const settings = await loadSettings();
+serverUrl.value = settings.serverUrl;
+token.value = settings.token;
+renderStatus();

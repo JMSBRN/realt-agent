@@ -1,7 +1,7 @@
-import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { ParseResultSchema, type ParseResult } from "@realt-agent/shared";
+import { config } from "./config.ts";
 
 const client = new Anthropic();
 
@@ -18,14 +18,14 @@ const SYSTEM = `Ты разбираешь запросы на поиск ква�
 /** Превращает текст пользователя в параметры поиска или уточняющий вопрос. */
 export async function parseQuery(text: string): Promise<ParseResult> {
   const response = await client.beta.messages.parse({
-    model: process.env.CLAUDE_MODEL ?? "claude-opus-5-5",
+    model: config.claudeModel,
     max_tokens: 16000,
     // Простое извлечение: низкого усилия достаточно
     output_config: { effort: "low", format: betaZodOutputFormat(ParseResultSchema) },
     // Если модель откажет по политике, API сам повторит запрос на запасной модели
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
-    system: SYSTEM.replace("{RATE}", process.env.USD_BYN_RATE ?? "3.0"),
+    system: SYSTEM.replace("{RATE}", config.usdBynRate),
     messages: [{ role: "user", content: text }],
   });
 
