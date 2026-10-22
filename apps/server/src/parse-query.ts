@@ -2,8 +2,10 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { ParseResultSchema, type ParseResult } from "@realt-agent/shared";
 import { config } from "./config.ts";
+import { simpleParse } from "./simple-parser.ts";
 
-const client = new Anthropic();
+// Без ключа Claude бот разбирает запросы правилами (simple-parser.ts)
+const client = process.env.ANTHROPIC_API_KEY ? new Anthropic() : null;
 
 const SYSTEM = `Ты разбираешь запросы на поиск квартир в Беларуси (сайт realt.by) и превращаешь их в параметры поиска.
 
@@ -17,6 +19,17 @@ const SYSTEM = `Ты разбираешь запросы на поиск ква�
 
 /** Превращает текст пользователя в параметры поиска или уточняющий вопрос. */
 export async function parseQuery(text: string): Promise<ParseResult> {
+  const rate = Number(config.usdBynRate);
+  if (!client) return simpleParse(text, rate);
+  try {
+    return await parseWithClaude(client, text);
+  } catch (e) {
+    console.error("[claude] разбор не удался, использую правила:", e);
+    return simpleParse(text, rate);
+  }
+}
+
+async function parseWithClaude(client: Anthropic, text: string): Promise<ParseResult> {
   const response = await client.beta.messages.parse({
     model: config.claudeModel,
     max_tokens: 16000,
