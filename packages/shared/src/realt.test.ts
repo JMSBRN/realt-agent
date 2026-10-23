@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildRealtUrl, mapRealtObject, matchesParams, type RealtRawObject } from "./realt.ts";
+import { BELARUS, knownPlace, realtTranslit, townPageUrls } from "./geo.ts";
+import { buildListUrl, buildRealtUrl, mapRealtObject, matchesParams, objectPath, type RealtRawObject } from "./realt.ts";
 import type { SearchParams } from "./schemas.ts";
 
 // Урезанный реальный объект с realt.by (октябрь 2026)
@@ -39,6 +40,46 @@ test("buildRealtUrl", () => {
     { townUuid: "4cb07174-7b00-11eb-8943-0cc47adabd66" },
   ]);
   assert.throws(() => buildRealtUrl({ ...base, city: "Пинск" }));
+  // одно значение комнат — фильтр сайта, несколько — наш
+  assert.equal(new URL(buildRealtUrl({ ...base, rooms: [1] })).searchParams.get("rooms"), "1");
+  assert.equal(new URL(buildRealtUrl({ ...base, rooms: [1, 2] })).searchParams.get("rooms"), null);
+});
+
+test("buildListUrl: вся страна, область, другие разделы", () => {
+  const country = new URL(buildListUrl({ deal: "sale", type: "flat", place: BELARUS }));
+  assert.equal(country.pathname, "/sale/flats/");
+  assert.equal(country.searchParams.get("addressV2"), null);
+
+  const region = new URL(buildListUrl({ deal: "sale", type: "house", place: knownPlace("Гомельская обл.")! }));
+  assert.equal(region.pathname, "/sale/cottages/");
+  assert.deepEqual(JSON.parse(region.searchParams.get("addressV2")!), [{ stateRegionUuid: "499f02f0-7b00-11eb-8943-0cc47adabd66" }]);
+
+  assert.equal(new URL(buildListUrl({ deal: "sale", type: "newbuild", place: BELARUS })).pathname, "/newflats/");
+  assert.equal(new URL(buildListUrl({ deal: "rent_day", type: "flat", place: BELARUS })).pathname, "/rent/flat-for-day/");
+  assert.throws(() => buildListUrl({ deal: "rent", type: "plot", place: BELARUS }));
+  assert.equal(objectPath("/sale/cottages/"), "/sale-cottages/object/");
+  assert.equal(objectPath("/newflats/"), "/zhiloy-kompleks/object/");
+});
+
+test("geo: места без обращения к сайту и страницы городов", () => {
+  assert.deepEqual(knownPlace("в Гомеле"), { title: "Гомель", address: { townUuid: "4c95d414-7b00-11eb-8943-0cc47adabd66" } });
+  assert.equal(knownPlace("г. Минск")!.title, "Минск");
+  assert.equal(knownPlace("Минская область")!.title, "Минская область");
+  assert.equal(knownPlace("вся Беларусь"), BELARUS);
+  assert.equal(knownPlace(""), BELARUS);
+  assert.equal(knownPlace("Мозырь"), null);
+
+  assert.equal(realtTranslit("Буда-Кошелёво"), "buda-koshelevo");
+  assert.equal(realtTranslit("Слуцк"), "sluck");
+  assert.equal(realtTranslit("Ивье"), "ive");
+  assert.equal(realtTranslit("Бобруйск"), "bobrujsk");
+
+  assert.deepEqual(townPageUrls("Мозырь", "Гомельская область"), ["https://realt.by/gomel-region/sale/flats/mozyr/"]);
+  assert.deepEqual(townPageUrls("Борисов", "Минская"), ["https://realt.by/sale/flats/borisov/"]);
+  // область не названа: сначала та, где город есть в списке, потом остальные
+  const urls = townPageUrls("Пинск");
+  assert.equal(urls[0], "https://realt.by/brest-region/sale/flats/pinsk/");
+  assert.equal(urls.length, 6);
 });
 
 test("mapRealtObject", () => {
@@ -49,6 +90,15 @@ test("mapRealtObject", () => {
   assert.equal(l.priceByn, 1960);
   assert.equal(l.lat, 53.9343);
   assert.equal(l.lon, 27.5997);
+  // новостройка: ссылка на ЖК, цена «от»
+  const nb = mapRealtObject(
+    { code: 3339949, title: "ЖК «Гулливер»", headline: "Длинное описание", priceRatesMin: { "840": 786650 }, availableYear: 2026, availableQuarter: 4 },
+    "/newflats/",
+  );
+  assert.equal(nb.url, "https://realt.by/zhiloy-kompleks/object/3339949/");
+  assert.equal(nb.title, "ЖК «Гулливер»");
+  assert.equal(nb.priceUsd, 786650);
+  assert.equal(nb.ready, "4 кв. 2026");
 });
 
 test("matchesParams", () => {

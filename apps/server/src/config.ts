@@ -30,6 +30,10 @@ export const config = {
     .map((s) => s.trim())
     .filter(Boolean)
     .map(Number),
+  // Собеседник: любая модель с OpenAI-совместимым API (Groq, OpenRouter, Ollama…). Без ключа — только кнопки и правила.
+  llmApiKey: process.env.LLM_API_KEY || null,
+  llmBaseUrl: (process.env.LLM_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, ""),
+  llmModel: process.env.LLM_MODEL || "openai/gpt-oss-120b",
   watchIntervalMin: Number(process.env.WATCH_INTERVAL_MIN ?? 30),
   dbPath: process.env.DB_PATH ?? "realt-agent.db",
 };

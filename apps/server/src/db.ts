@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
-import type { SearchParams, TaskPayload, TaskStatus } from "@realt-agent/shared";
+import type { Place, SearchParams, TaskPayload, TaskStatus } from "@realt-agent/shared";
 import type { Draft, Step } from "./dialogue.ts";
 import type { MapPoint } from "./map-page.ts";
 
@@ -70,6 +70,18 @@ CREATE TABLE IF NOT EXISTS maps (
   points TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS places (
+  key TEXT PRIMARY KEY,
+  place TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS talk (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS talk_chat_idx ON talk (chat_id, id);
 CREATE TABLE IF NOT EXISTS seen (
   search_id INTEGER NOT NULL REFERENCES searches(id) ON DELETE CASCADE,
   listing_id TEXT NOT NULL,
@@ -248,5 +260,31 @@ export class Store {
       if (insert.run(searchId, id).changes === 0) already.add(id);
     }
     return already;
+  }
+
+  /** Города, которые уже узнавали у realt.by. */
+  cachedPlace(key: string): Place | null {
+    const r = this.db.prepare("SELECT place FROM places WHERE key = ?").get(key) as Row | undefined;
+    return r ? JSON.parse(r.place as string) : null;
+  }
+
+  cachePlace(key: string, place: Place) {
+    this.db.prepare("INSERT OR REPLACE INTO places (key, place) VALUES (?, ?)").run(key, JSON.stringify(place));
+  }
+
+  /** Реплики разговора с собеседником: последние limit, старые сначала. */
+  talk(chatId: number, limit = 12): Array<{ role: "user" | "assistant"; content: string }> {
+    const rows = this.db
+      .prepare("SELECT role, content FROM talk WHERE chat_id = ? ORDER BY id DESC LIMIT ?")
+      .all(chatId, limit) as Row[];
+    return rows.reverse().map((r) => ({ role: r.role as "user" | "assistant", content: r.content as string }));
+  }
+
+  addTalk(chatId: number, role: "user" | "assistant", content: string) {
+    this.db.prepare("INSERT INTO talk (chat_id, role, content) VALUES (?, ?, ?)").run(chatId, role, content.slice(0, 4000));
+  }
+
+  clearTalk(chatId: number) {
+    this.db.prepare("DELETE FROM talk WHERE chat_id = ?").run(chatId);
   }
 }

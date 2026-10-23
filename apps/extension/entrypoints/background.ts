@@ -1,6 +1,6 @@
-import type { ExtensionMessage, ServerMessage, TaskPayload, TaskResult } from "@realt-agent/shared";
+import type { ExtensionMessage, ProbePayload, ServerMessage, TaskPayload, TaskResult } from "@realt-agent/shared";
 import { browser } from "wxt/browser";
-import { CaptchaError, scrapeRealt } from "@/lib/scrape-realt";
+import { CaptchaError, probeRealt, scrapeRealt } from "@/lib/scrape-realt";
 import { loadSettings } from "@/lib/settings";
 
 export default defineBackground(() => {
@@ -45,6 +45,7 @@ export default defineBackground(() => {
     socket.onmessage = (e) => {
       const msg = JSON.parse(e.data) as ServerMessage;
       if (msg.type === "task") enqueue(msg.id, msg.payload);
+      if (msg.type === "probe") enqueueProbe(msg.id, msg.payload);
     };
   }
 
@@ -52,6 +53,18 @@ export default defineBackground(() => {
     if (taken.has(id)) return;
     taken.add(id);
     queue = queue.then(() => runTask(id, payload)).catch((e) => console.error("task failed", id, e));
+  }
+
+  /** Быстрые запросы («сколько однушек в Гомеле») — в ту же очередь: вкладки не мешают друг другу. */
+  function enqueueProbe(id: string, payload: ProbePayload) {
+    if (taken.has(id)) return;
+    taken.add(id);
+    queue = queue
+      .then(async () => {
+        const result = await probeRealt(payload);
+        send({ type: "probe_result", id, result });
+      })
+      .catch((e) => console.error("probe failed", id, e));
   }
 
   async function runTask(id: string, payload: TaskPayload) {

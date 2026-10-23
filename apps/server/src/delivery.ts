@@ -17,8 +17,8 @@ export function selectListings(store: Store, task: Task, items: Listing[]): List
 }
 
 /** Бюджет, до которого стоит поднять потолок, чтобы самый доступный вариант попал в выдачу. */
-export function raisedBudget(cheapestUsd: number, deal: "sale" | "rent"): number {
-  const step = deal === "sale" ? 1000 : 50;
+export function raisedBudget(cheapestUsd: number, deal: "sale" | "rent" | "rent_day"): number {
+  const step = deal === "sale" ? 1000 : deal === "rent" ? 50 : 10;
   return Math.ceil((cheapestUsd * 1.05) / step) * step;
 }
 

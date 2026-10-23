@@ -1,3 +1,4 @@
+import { Agent } from "./agent.ts";
 import { createBot, enqueue } from "./bot.ts";
 import { ExtensionBridge } from "./bridge.ts";
 import { config } from "./config.ts";
@@ -5,6 +6,8 @@ import { Store } from "./db.ts";
 import { deliver } from "./delivery.ts";
 import { LeadService } from "./lead-service.ts";
 import { startMapServer } from "./map-page.ts";
+import { OpenAICompatibleLLM } from "./llm.ts";
+import { Realty } from "./realty.ts";
 import { GoogleSheets } from "./sheets.ts";
 
 const TASK_TIMEOUT_MIN = 30;
@@ -16,7 +19,16 @@ store.requeueRunning(); // задачи, прерванные прошлым п�
 let bot: ReturnType<typeof createBot>;
 let leads: LeadService;
 const bridge = new ExtensionBridge(store, (task, result) => deliver(bot.api, store, task, result, config.publicUrl));
-bot = createBot(store, bridge, (chatId, draft, tg) => leads.save(chatId, draft, tg));
+const agent = config.llmApiKey
+  ? new Agent(
+      new OpenAICompatibleLLM(config.llmBaseUrl, config.llmApiKey, config.llmModel),
+      new Realty(bridge, store),
+      store,
+      config.usdBynRate,
+    )
+  : null;
+if (!agent) console.log("[agent] LLM_API_KEY не задан — бот отвечает только по кнопкам и правилам");
+bot = createBot(store, bridge, (chatId, draft, tg) => leads.save(chatId, draft, tg), agent);
 
 const sheets =
   config.googleKeyFile && config.googleSheet

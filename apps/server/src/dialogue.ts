@@ -1,4 +1,4 @@
-import type { SearchParams } from "@realt-agent/shared";
+import type { Place, PropertyType, SearchParams } from "@realt-agent/shared";
 import { ANY, extract, findBudget, normalize } from "./extract.ts";
 import { describeParams } from "./format.ts";
 import {
@@ -43,6 +43,9 @@ export interface Draft {
   contactOnly?: boolean;
   /** Имя из профиля Telegram — подсказка на вопрос «как к вам обращаться». */
   tgName?: string;
+  /** Тип и место — если поиск задал собеседник (по умолчанию квартиры в Минске). */
+  type?: PropertyType;
+  place?: Place;
 }
 
 export interface Button {
@@ -63,6 +66,8 @@ export interface Reply {
   removeKeyboard?: boolean;
   /** Какой вопрос ждёт ответа (null — диалог завершён). */
   step: Step | null;
+  /** Правила ничего не поняли — фразу лучше отдать собеседнику (если он подключён). */
+  fallback?: boolean;
 }
 
 const CORE_FIELD: Record<CoreStep, keyof Draft> = {
@@ -76,6 +81,8 @@ const CORE_FIELD: Record<CoreStep, keyof Draft> = {
 
 const usd = (n: number) => "$" + Math.round(n).toLocaleString("ru-RU").replace(/[\s ,]/g, " ");
 const isCore = (s: Step): s is CoreStep => (CORE as string[]).includes(s);
+/** Вопрос, на который можно ответить и свободной фразой (не анкета и не контакты). */
+export const isOpenStep = (s: Step | null) => s === null || s === "mode" || isCore(s);
 const profileQuestion = (s: Step) => (s.startsWith("p_") ? PROFILE_QUESTIONS.find((q) => `p_${q.key}` === s) : undefined);
 
 // ---------- порядок вопросов ----------
@@ -105,7 +112,9 @@ export function hasRange(d: Draft): boolean {
 export function toParams(d: Draft): SearchParams {
   return {
     deal: d.deal ?? "sale",
-    city: "Минск",
+    ...(d.type ? { type: d.type } : {}),
+    city: d.place?.title ?? "Минск",
+    ...(d.place ? { place: d.place } : {}),
     rooms: d.rooms ?? [],
     priceMinUsd: d.budget?.min ?? null,
     priceMaxUsd: d.budget?.max ?? null,
@@ -120,7 +129,10 @@ export function toParams(d: Draft): SearchParams {
 export function fromParams(p: SearchParams): Draft {
   return {
     mode: "quick",
-    deal: p.deal,
+    // Кнопки диалога знают только «купить» и «снять»: посуточную аренду уточняем как аренду
+    deal: p.deal === "rent_day" ? "rent" : p.deal,
+    ...(p.type ? { type: p.type } : {}),
+    ...(p.place ? { place: p.place } : {}),
     rooms: p.rooms,
     budget: { min: p.priceMinUsd, max: p.priceMaxUsd },
     areaMin: p.areaMin,
@@ -511,9 +523,9 @@ export function onText(
 
   if (!acks.length) {
     // Ничего не поняли: в диалоге переспрашиваем, вне диалога начинаем знакомство заново
-    if (step === null) return { draft: { tgName: d.tgName }, reply: greeting() };
+    if (step === null) return { draft: { tgName: d.tgName }, reply: { ...greeting(), fallback: true } };
     const q = question(step, result);
-    return { draft: result, reply: { ...q, text: "Не совсем понял 🙂 " + q.text, step } };
+    return { draft: result, reply: { ...q, text: "Не совсем понял 🙂 " + q.text, step, fallback: true } };
   }
   return { draft: result, reply: advance(result, acks.filter((a) => a !== "👍"), step) };
 }
