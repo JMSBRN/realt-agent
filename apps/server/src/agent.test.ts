@@ -212,3 +212,14 @@ test("bridge.probe: запрос уходит в расширение и отв�
   // без браузера — сразу ошибка, без ожидания
   assert.equal((await new ExtensionBridge(store, async () => {}).probe({ urls: [], maxPages: 1, listPath: "/" })).status, "failed");
 });
+
+test("wantsAgent: после ответа собеседника уточнения идут ему, анкета и контакты — правилам", async () => {
+  const { wantsAgent, onText } = await import("./dialogue.ts");
+  const rules = (d: object, step: Parameters<typeof wantsAgent>[1], text: string) =>
+    wantsAgent(d, step, onText(d, step, text, 3, null).reply, text);
+  // «в районе 50000 долларов» правила поняли бы как бюджет квартиры в Минске — но разговор ведёт собеседник
+  assert.ok(rules({ talking: true }, null, "в районе 50000 долларов"));
+  assert.ok(!rules({}, null, "куплю двушку в Минске до 80 тыс"));
+  assert.ok(rules({}, "mode", "сколько однушек в гомеле"));
+  assert.ok(!rules({ talking: true }, "c_phone", "+375291112233"));
+});
