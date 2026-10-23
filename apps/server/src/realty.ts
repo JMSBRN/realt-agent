@@ -176,11 +176,12 @@ export class Realty {
    * Цену, площадь, этаж и слова проверяем по первым страницам выдачи: если просмотрели всё — точно,
    * иначе — оценка по доле подходящих.
    */
-  async count(q: MarketQuery) {
-    return this.countFor(await this.toParams(q));
+  async count(q: MarketQuery, examples = 3) {
+    return this.countFor(await this.toParams(q), examples);
   }
 
-  async countFor(params: SearchParams) {
+  /** examples — сколько объявлений вернуть для разговора (до 10: «пришли списком с ценами»). */
+  async countFor(params: SearchParams, examples = 3) {
     const place = params.place!;
     const path = listPath(params.deal, params.type!);
     const ownFilters =
@@ -232,7 +233,7 @@ export class Realty {
         : params.keywords.length
           ? "по упоминанию в тексте объявления"
           : undefined,
-      examples: samples.slice(0, 3).map(short),
+      examples: samples.slice(0, Math.min(Math.max(examples, 1), 10)).map(short),
       streets: topStreets(samples),
     };
   }

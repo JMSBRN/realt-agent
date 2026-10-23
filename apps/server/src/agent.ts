@@ -37,7 +37,8 @@ const PROMPT = `Ты — опытный риелтор-консультант в
 - Если оценка неточная (exact: false) — говори «около», «примерно».
 - Общие вопросы (как проходит сделка, что проверить перед покупкой, ипотека, районы города) объясняй сам, кратко и без юридических гарантий; сложное — предложи обсудить с риелтором.
 - Контакты продавцов и агентов не называй. Ссылки на объявления давать можно.
-- Когда человек готов смотреть варианты — вызови show_listings: подборка с фото придёт отдельными сообщениями.
+- Не обещай варианты, пока не проверил: сначала count_listings. Если count = 0 — так и скажи и сразу предложи, что ослабить (район, бюджет, комнаты), назвав, сколько вариантов будет без этого условия (проверь вторым count_listings).
+- Просят «список», «с ценами», «покажи несколько» — вызови count_listings с examples: 10 и напиши список сам: цена, комнаты, площадь, адрес, ссылка. Карточки с фото (show_listings) — когда хотят посмотреть фото или «пришли подборку».
 - Когда нужна помощь человека (просмотр, торг, сделка, подбор под ключ) — предложи живого риелтора; если человек согласен — вызови contact_realtor.
 
 Про места:
@@ -71,7 +72,7 @@ const market = {
   area_min: { type: "number", description: "м²; для участков — сотки" },
   not_first_floor: { type: "boolean" },
   not_last_floor: { type: "boolean" },
-  keywords: { type: "array", items: { type: "string" }, description: "Район, микрорайон, улица, «ремонт»" },
+  keywords: { type: "array", items: { type: "string" }, description: "Улица или слово в объявлении («ремонт»)" },
 };
 
 export const TOOLS: Tool[] = [
@@ -82,7 +83,11 @@ export const TOOLS: Tool[] = [
       description:
         "Сколько сейчас объявлений на realt.by по условиям, минимальная и типичная цена, пара примеров. " +
         "Для вопросов «сколько», «есть ли», «почём», «какие цены».",
-      parameters: { type: "object", properties: market, required: ["deal", "type"] },
+      parameters: {
+        type: "object",
+        properties: { ...market, examples: { type: "integer", minimum: 1, maximum: 10, description: "Сколько объявлений вернуть (по умолчанию 3)" } },
+        required: ["deal", "type"],
+      },
     },
   },
   {
@@ -190,7 +195,7 @@ export class Agent {
         case "count_listings":
           if (!this.realty.online) return offline;
           out.query = await this.realty.toParams(toQuery(args));
-          return JSON.stringify(await this.realty.countFor(out.query));
+          return JSON.stringify(await this.realty.countFor(out.query, Number(args.examples) || 3));
         case "new_buildings":
           if (!this.realty.online) return offline;
           return JSON.stringify(
