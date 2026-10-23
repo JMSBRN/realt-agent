@@ -253,3 +253,49 @@ test("topStreets: улицы из адресов объявлений", () => {
   ]);
   assert.equal(topStreets([listing(4, { address: "Гомель Речицкий просп. 8 Б", town: "Гомель" })])[0]!.street, "Речицкий просп.");
 });
+
+test("справочник районов: падежи, Минск подробно, у Борисова районов нет", async () => {
+  const { townAreas, areaPageUrls } = await import("./areas.ts");
+  const minsk = townAreas("в Минске")!;
+  assert.equal(minsk.town, "Минск");
+  assert.equal(minsk.districts.length, 9);
+  assert.ok(minsk.districts.some((d) => d.micro.includes("Уручье")));
+  assert.deepEqual(townAreas("Гомеле")!.districts.map((d) => d.name).sort(), [
+    "Железнодорожный район", "Новобелицкий район", "Советский район", "Центральный район",
+  ]);
+  assert.equal(townAreas("Борисов")!.districts.length, 0);
+  assert.equal(townAreas("Неведомск"), null);
+
+  const base = "https://realt.by/sale/flats/minsk/";
+  assert.deepEqual(areaPageUrls(base, "Октябрьский район"), ["https://realt.by/sale/flats/minsk/oktjabrskij-rajon/"]);
+  assert.equal(areaPageUrls(base, "Минск Мир (Minsk World)")[0], "https://realt.by/sale/flats/minsk/minsk-mir-mk-r-n/");
+  // realt.by обрезает адрес до 50 символов
+  assert.equal(
+    areaPageUrls(base, "Пушкина-Глебки-Притыцкого-Ольшевского-Кальварийская")[0],
+    "https://realt.by/sale/flats/minsk/pushkina-glebki-prityckogo-olshevskogo-kalvarijska/",
+  );
+});
+
+test("count по району: страница района — точно, нет страницы — по упоминанию", async () => {
+  const browser = new FakeBrowser((p) => {
+    const url = p.urls[0]!;
+    if (url.endsWith("/uruche-mk-r-n/")) return done({ geoTitle: "Уручье", address: { townSubDistrictUuid: "uru" } });
+    if (url.endsWith("/sale/flats/borisov/")) return done({ geoTitle: "г. Борисов", address: { townUuid: "bor" } });
+    if (url.includes("/pechi")) return { status: "notfound" };
+    return done({ totalCount: 40, scanned: 40, matched: 3 });
+  });
+  const realty = new Realty(browser, new Store(":memory:"));
+  const uru = await realty.toParams({ deal: "sale", type: "flat", town: "Минск", area: "Уручье" });
+  assert.deepEqual(uru.place?.address, { townSubDistrictUuid: "uru" });
+  assert.equal(uru.city, "Минск, Уручье");
+  assert.deepEqual(uru.keywords, []);
+
+  const pechi = await realty.count({ deal: "sale", type: "flat", town: "Борисов", region: "Минская область", area: "Печи" });
+  assert.equal(pechi.count, 3);
+  assert.match(pechi.areaBy!, /упоминанию/);
+  // страницы района ищем один раз — неудача тоже запоминается
+  const before = browser.calls.length;
+  await realty.toParams({ deal: "sale", type: "flat", town: "Борисов", region: "Минская область", area: "Печи" });
+  assert.equal(browser.calls.filter((c) => c.urls[0]!.includes("/pechi")).length, 1);
+  assert.ok(browser.calls.length >= before);
+});
