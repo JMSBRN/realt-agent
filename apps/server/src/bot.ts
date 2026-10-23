@@ -130,7 +130,13 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
         // Запоминаем, о чём шла речь: нажмёт кнопки — продолжим в том же городе, а не в Минске
         const base = r.query ? fromParams(r.query) : store.chat(chatId).draft;
         store.setDialog(chatId, { ...base, talking: true }, null);
-        await ctx.reply(agentHtml(r.text), { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+        // Своя карта: по https — внутри Telegram, по http — ссылкой в браузер
+        const reply_markup = r.map
+          ? r.map.startsWith("https://")
+            ? new InlineKeyboard().webApp("🗺 Открыть карту", r.map)
+            : new InlineKeyboard().url("🗺 Открыть карту", r.map)
+          : undefined;
+        await ctx.reply(agentHtml(r.text), { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup });
         if (r.search) await searchFor(ctx, r.search);
         if (r.contact) {
           const { draft, reply } = startContact(store.lastSearch(chatId)?.params ?? null, ctx.from?.first_name);

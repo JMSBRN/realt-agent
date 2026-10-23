@@ -1,6 +1,8 @@
 import { DEALS, PROPERTY_TYPES, type SearchParams } from "@realt-agent/shared";
 import type { ChatMessage, LLM, Tool, ToolCall } from "./llm.ts";
 import { townAreas } from "./areas.ts";
+import { describeParams } from "./format.ts";
+import { toPoints, type MapPoint } from "./map-page.ts";
 import { RealtyError, type MarketQuery, type Realty } from "./realty.ts";
 
 /**
@@ -22,6 +24,14 @@ export interface AgentReply {
   contact?: boolean;
   /** О чём шла речь (город, тип, комнаты) — чтобы кнопки и подборка продолжали с того же места. */
   query?: SearchParams;
+  /** Своя карта бота с ценами — показать кнопкой. */
+  map?: string;
+}
+
+/** Карты результатов бота (map-page.ts): публичный адрес сервера и сохранение точек. */
+export interface Maps {
+  publicUrl: string;
+  addMap(title: string, points: MapPoint[]): string;
 }
 
 const MAX_TOOL_ROUNDS = 5;
@@ -36,7 +46,8 @@ const PROMPT = `Ты — опытный риелтор-консультант в
 - Не придумывай цифры, цены и объекты. Всё про количество, цены и конкретные варианты узнавай инструментами — это живые данные realt.by. Называй источник просто: «сейчас на realt.by».
 - Если оценка неточная (exact: false) — говори «около», «примерно».
 - Общие вопросы (как проходит сделка, что проверить перед покупкой, ипотека, районы города) объясняй сам, кратко и без юридических гарантий; сложное — предложи обсудить с риелтором.
-- Контакты продавцов и агентов не называй. Ссылки на объявления давать можно.
+- Контакты продавцов и агентов не называй. Ссылки давай ТОЛЬКО те, что пришли из инструментов (url объявлений, realtUrl выдачи, ссылка карты). Никогда не составляй ссылки сам — выдуманная ссылка не откроется.
+- У бота есть своя карта с ценами: show_map. Когда просят «на карте», «покажи на карте», «где они находятся» — вызывай её, кнопка карты придёт клиенту.
 - Не обещай варианты, пока не проверил: сначала count_listings. Если count = 0 — так и скажи и сразу предложи, что ослабить (район, бюджет, комнаты), назвав, сколько вариантов будет без этого условия (проверь вторым count_listings).
 - Просят «список», «с ценами», «покажи несколько» — вызови count_listings с examples: 10 и напиши список сам: цена, комнаты, площадь, адрес, ссылка. Карточки с фото (show_listings) — когда хотят посмотреть фото или «пришли подборку».
 - Когда нужна помощь человека (просмотр, торг, сделка, подбор под ключ) — предложи живого риелтора; если человек согласен — вызови contact_realtor.
@@ -119,6 +130,14 @@ export const TOOLS: Tool[] = [
   {
     type: "function",
     function: {
+      name: "show_map",
+      description: "Своя карта бота: подходящие объявления точками с ценами. Клиенту придёт кнопка «Открыть карту».",
+      parameters: { type: "object", properties: market, required: ["deal", "type"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "contact_realtor",
       description: "Клиент согласен, чтобы с ним связался живой риелтор: начать сбор имени и телефона.",
       parameters: { type: "object", properties: {} },
@@ -151,6 +170,7 @@ export class Agent {
     private realty: Realty,
     private history: History,
     private usdBynRate: string,
+    private maps: Maps | null = null,
   ) {}
 
   /** context — что клиент уже выбрал кнопками (если выбирал). */
@@ -219,6 +239,16 @@ export class Agent {
           return this.realty.online
             ? "Подборка запущена: карточки с фото придут клиенту отдельными сообщениями примерно через минуту."
             : "Подборка поставлена в очередь, но браузер с realt.by сейчас не в сети — карточки придут, как только он подключится.";
+        case "show_map": {
+          if (!this.maps) return "Карта у бота не настроена (нет PUBLIC_URL). Скажи, что карты пока нет, и предложи подборку или список.";
+          if (!this.realty.online) return offline;
+          const params = (out.query = await this.realty.toParams(toQuery(args)));
+          const { count, items } = await this.realty.listings(params);
+          const points = toPoints(items);
+          if (!points.length) return `Нет объявлений с координатами для карты (всего подходит около ${count}).`;
+          out.map = `${this.maps.publicUrl}/map/${this.maps.addMap(`${count} вариантов · ${describeParams(params)}`, points)}`;
+          return `Карта готова: ${points.length} точек${count > points.length ? ` (самые свежие из ~${count})` : ""}. Кнопка «Открыть карту» придёт клиенту под твоим ответом — ссылку не пиши.`;
+        }
         case "contact_realtor":
           out.contact = true;
           return "Сейчас бот спросит у клиента имя и телефон. Коротко поблагодари и скажи, что риелтор свяжется.";

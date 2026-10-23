@@ -182,6 +182,36 @@ export class Realty {
 
   /** examples — сколько объявлений вернуть для разговора (до 10: «пришли списком с ценами»). */
   async countFor(params: SearchParams, examples = 3) {
+    const { total, matchedEstimate, exact, minPriceUsd, samples, ownFilters } = await this.scan(params);
+    const prices = samples.map((l) => l.priceUsd).filter((p): p is number => p != null).sort((a, b) => a - b);
+    const siteRooms = params.rooms.length === 1 && params.rooms[0]! < 5 ? params.rooms[0]! : null;
+    return {
+      what: `${DEAL_LABELS[params.deal]} ${TYPE_LABELS[params.type!]}`,
+      place: params.place!.title,
+      count: matchedEstimate,
+      exact,
+      totalWithoutOurFilters: ownFilters ? total : undefined,
+      minPriceUsd: minPriceUsd ?? prices[0] ?? null,
+      medianPriceUsd: prices.length ? prices[Math.floor(prices.length / 2)] : null,
+      areaBy: params.place?.address?.townDistrictUuid || params.place?.address?.townSubDistrictUuid
+        ? "страница района на realt.by — число точное"
+        : params.keywords.length
+          ? "по упоминанию в тексте объявления"
+          : undefined,
+      // Настоящая ссылка на выдачу realt.by (место и комнаты; цену сайт в ссылке не принимает)
+      realtUrl: buildListUrl({ deal: params.deal, type: params.type!, place: params.place!, rooms: siteRooms }),
+      examples: samples.slice(0, Math.min(Math.max(examples, 1), 10)).map(short),
+      streets: topStreets(samples),
+    };
+  }
+
+  /** Подходящие объявления (до 60 на запрос к сайту) — для карты. */
+  async listings(params: SearchParams): Promise<{ count: number; items: Listing[] }> {
+    const { matchedEstimate, samples } = await this.scan(params);
+    return { count: matchedEstimate, items: samples };
+  }
+
+  private async scan(params: SearchParams) {
     const place = params.place!;
     const path = listPath(params.deal, params.type!);
     const ownFilters =
@@ -219,23 +249,7 @@ export class Realty {
       samples.push(...r.items);
     }
 
-    const prices = samples.map((l) => l.priceUsd).filter((p): p is number => p != null).sort((a, b) => a - b);
-    return {
-      what: `${DEAL_LABELS[params.deal]} ${TYPE_LABELS[params.type!]}`,
-      place: place.title,
-      count: matchedEstimate,
-      exact,
-      totalWithoutOurFilters: ownFilters ? total : undefined,
-      minPriceUsd: minPriceUsd ?? prices[0] ?? null,
-      medianPriceUsd: prices.length ? prices[Math.floor(prices.length / 2)] : null,
-      areaBy: params.place?.address?.townDistrictUuid || params.place?.address?.townSubDistrictUuid
-        ? "страница района на realt.by — число точное"
-        : params.keywords.length
-          ? "по упоминанию в тексте объявления"
-          : undefined,
-      examples: samples.slice(0, Math.min(Math.max(examples, 1), 10)).map(short),
-      streets: topStreets(samples),
-    };
+    return { total, matchedEstimate, exact, minPriceUsd, samples, ownFilters };
   }
 
   /** Новостройки и жилые комплексы — в том порядке, в каком их показывает realt.by. */

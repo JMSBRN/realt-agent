@@ -317,3 +317,29 @@ test("deliver: район/улица ничего не дали — снимае
   assert.deepEqual(research[0]!.keywords, []);
   assert.equal(research[0]!.priceMaxUsd, 68000);
 });
+
+test("show_map: своя карта бота — точки из выдачи и кнопка, а не выдуманная ссылка", async () => {
+  const store = new Store(":memory:");
+  const browser = new FakeBrowser(() =>
+    done({ totalCount: 30, scanned: 30, matched: 2, items: [listing(1, { lat: 52.4, lon: 31 }), listing(2)] }),
+  );
+  const llm = new ScriptedLLM([
+    { content: null, tool_calls: [{ name: "show_map", args: { deal: "sale", type: "flat", town: "Гомель", rooms: [1], price_max_usd: 50000 } }] },
+    { content: "Открыл карту — точки с ценами под сообщением." },
+  ]);
+  const maps = { publicUrl: "https://bot.test", addMap: (t: string, p: unknown[]) => store.addMap(t, p as never) };
+  const r = await new Agent(llm, new Realty(browser, store), store, "3.0", maps).reply(1, "покажи на своей карте");
+  assert.match(r.map!, /^https:\/\/bot\.test\/map\/[0-9a-f]{24}$/);
+  const saved = store.getMap(r.map!.split("/").pop()!)!;
+  assert.equal(saved.points.length, 1); // без координат точка на карту не попадает
+  assert.match(llm.seen[1]!.at(-1)!.content as string, /Карта готова: 1 точек/);
+});
+
+test("count_listings: realtUrl — настоящий адрес выдачи realt.by", async () => {
+  const r = await new Realty(new FakeBrowser(() => done({ totalCount: 112 })), new Store(":memory:")).count({
+    deal: "sale", type: "flat", town: "Гомель", rooms: [1],
+  });
+  const url = new URL(r.realtUrl);
+  assert.equal(url.origin + url.pathname, "https://realt.by/sale/flats/");
+  assert.equal(url.searchParams.get("rooms"), "1");
+});
