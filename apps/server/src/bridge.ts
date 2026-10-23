@@ -1,6 +1,13 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
-import { TaskResultSchema, type ServerMessage, type TaskResult } from "@realt-agent/shared";
+import {
+  ProbeResultSchema,
+  TaskResultSchema,
+  type ProbePayload,
+  type ProbeResult,
+  type ServerMessage,
+  type TaskResult,
+} from "@realt-agent/shared";
 import type { Store, Task } from "./db.ts";
 
 type ResultHandler = (task: Task, result: TaskResult) => Promise<void>;
@@ -19,6 +26,7 @@ function tokenMatches(given: string | null, expected: string): boolean {
 export class ExtensionBridge {
   private socket: WebSocket | null = null;
   private wss: WebSocketServer | null = null;
+  private probes = new Map<string, (r: ProbeResult) => void>();
 
   constructor(
     private store: Store,
@@ -46,6 +54,8 @@ export class ExtensionBridge {
       ws.on("close", () => {
         if (this.socket !== ws) return;
         this.socket = null;
+        for (const done of this.probes.values()) done({ status: "failed", error: "браузер отключился" });
+        this.probes.clear();
         this.store.requeueRunning();
         console.log("[bridge] расширение отключено");
       });
@@ -69,8 +79,35 @@ export class ExtensionBridge {
     }
   }
 
+  /**
+   * Быстрый запрос к сайту через браузер: ждём ответ, а не кладём в очередь задач.
+   * Без браузера или по тайм-ауту — status: failed.
+   */
+  probe(payload: ProbePayload, timeoutMs = 120_000): Promise<ProbeResult> {
+    if (!this.connected) return Promise.resolve({ status: "failed", error: "браузер не в сети" });
+    const id = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => finish({ status: "failed", error: "браузер не ответил вовремя" }), timeoutMs);
+      const finish = (r: ProbeResult) => {
+        clearTimeout(timer);
+        this.probes.delete(id);
+        resolve(r);
+      };
+      this.probes.set(id, finish);
+      const msg: ServerMessage = { type: "probe", id, payload };
+      this.socket!.send(JSON.stringify(msg));
+    });
+  }
+
   private async handleMessage(raw: string) {
     const msg = JSON.parse(raw);
+    if (msg?.type === "probe_result" && typeof msg.id === "string") {
+      const parsed = ProbeResultSchema.safeParse(msg.result);
+      this.probes.get(msg.id)?.(
+        parsed.success ? parsed.data : { status: "failed", error: `неожиданный ответ расширения: ${parsed.error.message.slice(0, 200)}` },
+      );
+      return;
+    }
     if (msg?.type !== "result" || typeof msg.id !== "string") return; // hello / ping
     const task = this.store.task(msg.id);
     if (!task || task.status !== "running") return;
