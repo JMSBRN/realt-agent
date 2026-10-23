@@ -1,7 +1,8 @@
 import { InlineKeyboard, type Api } from "grammy";
 import { matchesParams, sortNewestFirst, type Listing, type TaskResult } from "@realt-agent/shared";
 import type { Store, Task } from "./db.ts";
-import { listingCaption, listingLine } from "./format.ts";
+import { describeParams, listingCaption, listingLine } from "./format.ts";
+import { toPoints } from "./map-page.ts";
 
 const HTML = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 
@@ -21,8 +22,16 @@ export function raisedBudget(cheapestUsd: number, deal: "sale" | "rent"): number
   return Math.ceil((cheapestUsd * 1.05) / step) * step;
 }
 
-const nextSteps = () =>
-  new InlineKeyboard()
+/** Кнопка карты: по https — Mini App внутри Telegram, по http — обычная ссылка в браузер. */
+function withMap(kb: InlineKeyboard, mapUrl: string | null): InlineKeyboard {
+  if (!mapUrl) return kb;
+  return mapUrl.startsWith("https://")
+    ? kb.webApp("🗺 Показать на карте", mapUrl).row()
+    : kb.url("🗺 Показать на карте", mapUrl).row();
+}
+
+const nextSteps = (mapUrl: string | null = null) =>
+  withMap(new InlineKeyboard(), mapUrl)
     .text("✏️ Изменить бюджет", "f:budget")
     .text("🏠 Другие комнаты", "f:rooms")
     .row()
@@ -30,7 +39,7 @@ const nextSteps = () =>
     .text("🔄 Новый поиск", "f:new");
 
 /** Отправляет итог задачи в Telegram. */
-export async function deliver(api: Api, store: Store, task: Task, result: TaskResult) {
+export async function deliver(api: Api, store: Store, task: Task, result: TaskResult, publicUrl: string | null = null) {
   const chatId = task.chat_id;
   const params = task.payload.params;
 
@@ -75,6 +84,13 @@ export async function deliver(api: Api, store: Store, task: Task, result: TaskRe
 
   const chat = store.chat(chatId);
   const shown = listings.slice(0, chat.results_limit);
+
+  // На карте — все найденные варианты, а не только показанные карточками
+  const points = toPoints(listings.slice(0, 200));
+  const mapUrl =
+    publicUrl && points.length
+      ? `${publicUrl}/map/${store.addMap(`${listings.length} вариантов · ${describeParams(params)}`, points)}`
+      : null;
   await api.sendMessage(
     chatId,
     task.only_new
@@ -96,5 +112,9 @@ export async function deliver(api: Api, store: Store, task: Task, result: TaskRe
     }
   }
 
-  if (!task.only_new) await api.sendMessage(chatId, "Что-то приглянулось? Могу уточнить поиск:", { reply_markup: nextSteps() });
+  if (!task.only_new) {
+    await api.sendMessage(chatId, "Что-то приглянулось? Могу уточнить поиск:", { reply_markup: nextSteps(mapUrl) });
+  } else if (mapUrl) {
+    await api.sendMessage(chatId, "Новые варианты на карте:", { reply_markup: withMap(new InlineKeyboard(), mapUrl) });
+  }
 }

@@ -40,6 +40,9 @@ export const ListingSchema = z.object({
   images: z.array(z.string()),
   description: z.string(),
   createdAt: z.string().nullable(),
+  // координаты для карты; optional — чтобы старые версии расширения не ломали проверку
+  lat: z.number().nullable().optional(),
+  lon: z.number().nullable().optional(),
 });
 export type Listing = z.infer<typeof ListingSchema>;
 

@@ -16,6 +16,7 @@ const raw: RealtRawObject = {
   address: "Минск Коласа ул. 59 2",
   images: ["https://cdn.realt.by/img/55/9851cfb8-ad15-11f1-8681-0242ac120002"],
   createdAt: "2026-09-10T16:05:51+03:00",
+  location: [27.5997, 53.9343],
 };
 
 const base: SearchParams = {
@@ -46,6 +47,8 @@ test("mapRealtObject", () => {
   assert.equal(l.url, "https://realt.by/rent-flat-for-long/object/4230328/");
   assert.equal(l.priceUsd, 660);
   assert.equal(l.priceByn, 1960);
+  assert.equal(l.lat, 53.9343);
+  assert.equal(l.lon, 27.5997);
 });
 
 test("matchesParams", () => {

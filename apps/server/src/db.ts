@@ -1,7 +1,8 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { SearchParams, TaskPayload, TaskStatus } from "@realt-agent/shared";
 import type { Draft, Step } from "./dialogue.ts";
+import type { MapPoint } from "./map-page.ts";
 
 export interface Chat {
   chat_id: number;
@@ -56,6 +57,12 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks (status);
+CREATE TABLE IF NOT EXISTS maps (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  points TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS seen (
   search_id INTEGER NOT NULL REFERENCES searches(id) ON DELETE CASCADE,
   listing_id TEXT NOT NULL,
@@ -192,6 +199,22 @@ export class Store {
          WHERE status IN ('queued', 'running') AND created_at < datetime('now', ?)`,
       )
       .run(`-${minutes} minutes`);
+  }
+
+  /** Сохраняет карту результатов; id — случайный, его не угадать по соседним. */
+  addMap(title: string, points: MapPoint[]): string {
+    const id = randomBytes(12).toString("hex");
+    this.db.prepare("INSERT INTO maps (id, title, points) VALUES (?, ?, ?)").run(id, title, JSON.stringify(points));
+    return id;
+  }
+
+  getMap(id: string): { title: string; points: MapPoint[] } | null {
+    const r = this.db.prepare("SELECT title, points FROM maps WHERE id = ?").get(id) as Row | undefined;
+    return r ? { title: r.title as string, points: JSON.parse(r.points as string) } : null;
+  }
+
+  deleteOldMaps(days: number) {
+    this.db.prepare("DELETE FROM maps WHERE created_at < datetime('now', ?)").run(`-${days} days`);
   }
 
   /** Отмечает объявления показанными; возвращает id тех, что уже были показаны раньше. */

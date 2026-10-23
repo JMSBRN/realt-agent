@@ -17,6 +17,10 @@ export const config = {
   wsHost: process.env.WS_HOST ?? "127.0.0.1",
   wsPort: Number(process.env.WS_PORT ?? 8765),
   wsToken: required("WS_TOKEN"),
+  // Карта результатов: публичный адрес, по которому её откроет Telegram. Пусто — кнопки карты не будет.
+  publicUrl: process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
+  mapHost: process.env.MAP_HOST ?? "0.0.0.0",
+  mapPort: Number(process.env.MAP_PORT ?? 8080),
   watchIntervalMin: Number(process.env.WATCH_INTERVAL_MIN ?? 30),
   dbPath: process.env.DB_PATH ?? "realt-agent.db",
 };

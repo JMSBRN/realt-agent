@@ -3,6 +3,7 @@ import { ExtensionBridge } from "./bridge.ts";
 import { config } from "./config.ts";
 import { Store } from "./db.ts";
 import { deliver } from "./delivery.ts";
+import { startMapServer } from "./map-page.ts";
 
 const TASK_TIMEOUT_MIN = 30;
 
@@ -11,14 +12,17 @@ store.requeueRunning(); // задачи, прерванные прошлым п�
 
 // bot создаётся после bridge, но обработчик результатов вызывается позже — к этому моменту он уже есть
 let bot: ReturnType<typeof createBot>;
-const bridge = new ExtensionBridge(store, (task, result) => deliver(bot.api, store, task, result));
+const bridge = new ExtensionBridge(store, (task, result) => deliver(bot.api, store, task, result, config.publicUrl));
 bot = createBot(store, bridge);
 
 bridge.listen(config.wsHost, config.wsPort, config.wsToken);
+if (config.publicUrl) startMapServer(store, config.mapHost, config.mapPort);
+else console.log("[map] PUBLIC_URL не задан — кнопки «Показать на карте» не будет");
 
 // Подписки «следить за новыми»
 setInterval(() => {
   store.expireOldTasks(TASK_TIMEOUT_MIN);
+  store.deleteOldMaps(14);
   if (!bridge.connected) return;
   for (const search of store.watchedSearches()) {
     if (!store.hasPendingTask(search.id)) enqueue(store, bridge, search, true);

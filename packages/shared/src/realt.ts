@@ -46,6 +46,8 @@ export interface RealtRawObject {
   metroStationName?: string | null;
   images?: string[] | null;
   createdAt?: string | null;
+  /** [долгота, широта] */
+  location?: [number, number] | null;
 }
 
 export function mapRealtObject(o: RealtRawObject, deal: SearchParams["deal"]): Listing {
@@ -66,6 +68,8 @@ export function mapRealtObject(o: RealtRawObject, deal: SearchParams["deal"]): L
     images: Array.isArray(o.images) ? o.images : [],
     description: (o.description ?? "").slice(0, 1000),
     createdAt: o.createdAt ?? null,
+    lat: o.location?.[1] ?? null,
+    lon: o.location?.[0] ?? null,
   };
 }
 
