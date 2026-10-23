@@ -53,7 +53,7 @@ export class OpenAICompatibleLLM implements LLM {
     const body = JSON.stringify({
       model: this.model,
       messages,
-      temperature: 0.4,
+      temperature: 0.2,
       ...(tools?.length ? { tools, tool_choice: "auto" } : {}),
     });
     const deadline = Date.now() + this.retrySeconds * 1000;

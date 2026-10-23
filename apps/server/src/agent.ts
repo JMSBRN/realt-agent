@@ -1,5 +1,6 @@
 import { DEALS, PROPERTY_TYPES, type SearchParams } from "@realt-agent/shared";
 import type { ChatMessage, LLM, Tool, ToolCall } from "./llm.ts";
+import { townAreas } from "./areas.ts";
 import { RealtyError, type MarketQuery, type Realty } from "./realty.ts";
 
 /**
@@ -41,7 +42,9 @@ const PROMPT = `Ты — опытный риелтор-консультант в
 
 Про места:
 - town — город или посёлок в именительном падеже («Гомель», «Мозырь», «Боровляны»), region — область («Гомельская область»), если знаешь её. Для вопроса про всю область — только region. Про всю страну — ни town, ни region.
-- Районы и микрорайоны города передавай в keywords («Уручье», «Каменная горка»).
+- Район или микрорайон города передавай в area («Октябрьский район», «Уручье», «Печи»): бот найдёт его страницу на realt.by и посчитает точно, а если такой страницы нет — поищет по упоминанию в объявлениях (в ответе будет areaBy).
+- Про районы и микрорайоны города сначала вызови town_areas — это справочник агентства. НЕ называй по памяти районы, микрорайоны, улицы, ЖК, школы и другие подробности городов — особенно небольших: легко ошибиться. Ещё опора — streets из count_listings: улицы, где сейчас больше всего объявлений. Если данных нет — честно скажи, что не хочешь ошибиться с названиями, и спроси, какой район интересует клиента.
+- Название района от клиента принимай как есть (он знает свой город лучше) и ищи по нему через area; если ничего не нашлось — так и скажи.
 
 Про параметры:
 - Цены в долларах США. Если человек назвал рубли — пересчитай примерно по курсу 1 $ ≈ {RATE} BYN.
@@ -61,6 +64,7 @@ const market = {
     description: "flat квартира, room комната, house дом/коттедж, dacha дача, plot участок, office, shop, warehouse, business",
   },
   ...where,
+  area: { type: "string", description: "Район или микрорайон города, если клиент его назвал" },
   rooms: { type: "array", items: { type: "integer", minimum: 1, maximum: 5 } },
   price_min_usd: { type: "number" },
   price_max_usd: { type: "number" },
@@ -92,6 +96,16 @@ export const TOOLS: Tool[] = [
   {
     type: "function",
     function: {
+      name: "town_areas",
+      description:
+        "Справочник агентства: районы, микрорайоны и улицы города. Вызывай, когда спрашивают про районы " +
+        "или нужно предложить, где искать. Подробно размечен Минск; по другим городам может быть мало данных.",
+      parameters: { type: "object", properties: { town: where.town }, required: ["town"] },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "show_listings",
       description: "Прислать клиенту подборку объявлений с фото и ссылками (несколько отдельных сообщений).",
       parameters: { type: "object", properties: market, required: ["deal", "type"] },
@@ -115,6 +129,7 @@ function toQuery(a: Record<string, unknown>): MarketQuery {
     type: (PROPERTY_TYPES as readonly string[]).includes(a.type as string) ? (a.type as MarketQuery["type"]) : "flat",
     town: str(a.town),
     region: str(a.region),
+    area: str(a.area),
     rooms: Array.isArray(a.rooms) ? a.rooms.map(Number).filter(Number.isInteger) : [],
     priceMinUsd: num(a.price_min_usd),
     priceMaxUsd: num(a.price_max_usd),
@@ -181,6 +196,19 @@ export class Agent {
           return JSON.stringify(
             await this.realty.newBuildings(toQuery(args).town, toQuery(args).region),
           );
+        case "town_areas": {
+          const town = String(args.town ?? "");
+          const found = townAreas(town);
+          if (!found || (!found.districts.length && !found.streets.length)) {
+            return `В справочнике нет районов для «${town}». Не называй районы по памяти — спроси клиента, какой район или улица ему нужны.`;
+          }
+          return JSON.stringify({
+            ...found,
+            note: found.districts.length
+              ? "Названия микрорайонов — как в базе агентства. Улицы — где было больше всего объявлений."
+              : "Районов в справочнике нет, только улицы, где было больше всего объявлений. Районы по памяти не называй.",
+          });
+        }
         case "show_listings":
           out.search = out.query = await this.realty.toParams(toQuery(args));
           return this.realty.online

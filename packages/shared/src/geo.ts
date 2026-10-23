@@ -175,3 +175,20 @@ export function townPageUrls(town: string, regionName?: string | null): string[]
   const listed = REGIONS.filter((r) => r.towns.includes(slug));
   return [...new Set([...listed, ...REGIONS].map(url))];
 }
+
+/** Область города, если её можно узнать без сайта: областной центр или город из списков выше. */
+export function townRegion(town: string): string | null {
+  const n = normalizePlace(town);
+  const center = REGIONS.find((r) => n.startsWith(r.center.stem) && n.length <= r.center.title.length + 2);
+  if (center) return center.title;
+  const slug = realtTranslit(n);
+  return REGIONS.find((r) => r.towns.includes(slug))?.title ?? null;
+}
+
+/** Адрес страницы города: для областного центра — со своей областью, а не первой попавшейся. */
+export function townPageUrl(town: string, regionName?: string | null): string | null {
+  const n = normalizePlace(town);
+  const center = REGIONS.find((r) => n.startsWith(r.center.stem) && n.length <= r.center.title.length + 2);
+  const name = center ? center.center.title : town;
+  return townPageUrls(name, regionName ?? townRegion(town))[0] ?? null;
+}

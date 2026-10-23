@@ -1,9 +1,11 @@
+import { areaPageUrls, townAreas } from "./areas.ts";
 import {
   BELARUS,
   buildListUrl,
   DEAL_LABELS,
   knownPlace,
   listPath,
+  townPageUrl,
   townPageUrls,
   TYPE_LABELS,
   type Deal,
@@ -35,6 +37,8 @@ export interface MarketQuery {
   type: PropertyType;
   town?: string | null;
   region?: string | null;
+  /** Район или микрорайон города: «Октябрьский район», «Уручье», «Печи». */
+  area?: string | null;
   rooms?: number[];
   priceMinUsd?: number | null;
   priceMaxUsd?: number | null;
@@ -70,6 +74,29 @@ const short = (l: Listing) => ({
   url: l.url,
 });
 
+/**
+ * Улицы, где больше всего объявлений: «Гомель Речицкий просп. 8 Б» → «Речицкий просп.».
+ * Это опора для разговора о районах — вместо догадок модели.
+ */
+export function topStreets(items: Listing[], n = 8): Array<{ street: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const l of items) {
+    let rest = l.address.trim();
+    if (l.town && rest.startsWith(l.town)) rest = rest.slice(l.town.length).trim();
+    const words: string[] = [];
+    for (const w of rest.split(/\s+/)) {
+      if (/\d/.test(w)) break;
+      words.push(w);
+    }
+    const street = words.join(" ");
+    if (street.length >= 3) counts.set(street, (counts.get(street) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([street, count]) => ({ street, count }));
+}
+
 export class Realty {
   constructor(
     private browser: Prober,
@@ -99,9 +126,36 @@ export class Realty {
     return place;
   }
 
+  /**
+   * Район или микрорайон: realt.by знает их как отдельные страницы, и тогда счёт точный.
+   * Не нашёлся — null: ищем по упоминанию в объявлениях.
+   */
+  async resolveArea(town: string, region: string | null | undefined, area: string): Promise<Place | null> {
+    const key = `area|${town}|${area}`.toLowerCase().trim();
+    const cached = this.cache.cachedPlace(key);
+    if (cached) return cached.address ? cached : null;
+    const base = townPageUrl(town, region ?? townAreas(town)?.region);
+    const urls = base ? areaPageUrls(base, area) : [];
+    if (!urls.length) return null;
+    const r = await this.browser.probe({ urls, maxPages: 1, listPath: "/sale/flats/" });
+    if (r.status !== "done" && r.status !== "notfound") throw probeError(r);
+    const exact = r.status === "done" && r.address && (r.address.townDistrictUuid || r.address.townSubDistrictUuid);
+    const place: Place = exact
+      ? { title: `${town}, ${r.geoTitle ?? area}`, address: r.address }
+      : { title: area, address: null }; // запоминаем и неудачу, чтобы не открывать страницы снова
+    this.cache.cachePlace(key, place);
+    return exact ? place : null;
+  }
+
   async toParams(q: MarketQuery): Promise<SearchParams> {
     listPath(q.deal, q.type); // проверка, что такой раздел есть
-    const place = await this.resolvePlace(q.town, q.region);
+    let place = await this.resolvePlace(q.town, q.region);
+    const keywords = [...(q.keywords ?? [])];
+    if (q.area?.trim() && q.town?.trim()) {
+      const area = await this.resolveArea(place.title, q.region, q.area.trim());
+      if (area) place = area;
+      else if (!keywords.includes(q.area.trim())) keywords.push(q.area.trim());
+    }
     return {
       deal: q.deal,
       type: q.type,
@@ -113,7 +167,7 @@ export class Realty {
       areaMin: q.areaMin ?? null,
       notFirstFloor: q.notFirstFloor ?? false,
       notLastFloor: q.notLastFloor ?? false,
-      keywords: q.keywords ?? [],
+      keywords,
     };
   }
 
@@ -173,7 +227,13 @@ export class Realty {
       totalWithoutOurFilters: ownFilters ? total : undefined,
       minPriceUsd: minPriceUsd ?? prices[0] ?? null,
       medianPriceUsd: prices.length ? prices[Math.floor(prices.length / 2)] : null,
+      areaBy: params.place?.address?.townDistrictUuid || params.place?.address?.townSubDistrictUuid
+        ? "страница района на realt.by — число точное"
+        : params.keywords.length
+          ? "по упоминанию в тексте объявления"
+          : undefined,
       examples: samples.slice(0, 3).map(short),
+      streets: topStreets(samples),
     };
   }
 
