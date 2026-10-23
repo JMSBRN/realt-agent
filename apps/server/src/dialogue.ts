@@ -1,6 +1,6 @@
 import type { Place, PropertyType, SearchParams } from "@realt-agent/shared";
 import { ANY, extract, findBudget, normalize } from "./extract.ts";
-import { describeParams } from "./format.ts";
+import { describeParams, looksLikeQuestion, needsAgent } from "./format.ts";
 import {
   CALL_TIMES,
   CONTACT_KEYS,
@@ -43,6 +43,8 @@ export interface Draft {
   contactOnly?: boolean;
   /** Имя из профиля Telegram — подсказка на вопрос «как к вам обращаться». */
   tgName?: string;
+  /** Разговор ведёт собеседник: уточнения («а до 50 тысяч?») — ему же, пока клиент не нажмёт кнопку. */
+  talking?: boolean;
   /** Тип и место — если поиск задал собеседник (по умолчанию квартиры в Минске). */
   type?: PropertyType;
   place?: Place;
@@ -83,6 +85,16 @@ const usd = (n: number) => "$" + Math.round(n).toLocaleString("ru-RU").replace(/
 const isCore = (s: Step): s is CoreStep => (CORE as string[]).includes(s);
 /** Вопрос, на который можно ответить и свободной фразой (не анкета и не контакты). */
 export const isOpenStep = (s: Step | null) => s === null || s === "mode" || isCore(s);
+
+/**
+ * Кому отвечать на текст: собеседнику или правилам.
+ * Анкета и контакты — всегда правила. Иначе собеседник, если разговор уже идёт с ним,
+ * если это вопрос, если речь не о квартире в Минске или если правила фразу не поняли.
+ */
+export function wantsAgent(d: Draft, step: Step | null, rulesReply: Reply, text: string): boolean {
+  if (!isOpenStep(step)) return false;
+  return !!d.talking || !!rulesReply.fallback || looksLikeQuestion(text) || needsAgent(text);
+}
 const profileQuestion = (s: Step) => (s.startsWith("p_") ? PROFILE_QUESTIONS.find((q) => `p_${q.key}` === s) : undefined);
 
 // ---------- порядок вопросов ----------

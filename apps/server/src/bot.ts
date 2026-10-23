@@ -8,17 +8,17 @@ import {
   advance,
   fromParams,
   greeting,
-  isOpenStep,
   onChoice,
   onContact,
   onText,
   question,
   startContact,
   toParams,
+  wantsAgent,
   type Draft,
   type Reply,
 } from "./dialogue.ts";
-import { agentHtml, describeParams, esc, looksLikeQuestion, needsAgent } from "./format.ts";
+import { agentHtml, describeParams, esc } from "./format.ts";
 import type { TgUser } from "./leads.ts";
 
 const MAX_PAGES = 3;
@@ -109,7 +109,7 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
   /** Поиск, который запустил собеседник: те же карточки, что и после кнопок. */
   async function searchFor(ctx: Context, params: SearchParams) {
     const chatId = ctx.chat!.id;
-    store.setDialog(chatId, fromParams(params), null);
+    store.setDialog(chatId, { ...fromParams(params), talking: true }, null);
     const searchId = store.addSearch(chatId, describeParams(params), params);
     enqueue(store, bridge, { id: searchId, chat_id: chatId, params }, false);
     if (!bridge.connected) await ctx.reply("🔴 Браузер сейчас не в сети. Откройте Chrome — поиск начнётся автоматически.");
@@ -126,6 +126,10 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
         const chat = store.chat(chatId);
         const context = chat.draft.deal ? describeParams(toParams(chat.draft)) : "";
         const r = await agent!.reply(chatId, text, context);
+        // Дальше уточнения — тоже собеседнику; вопрос кнопками, если был, снимаем.
+        // Запоминаем, о чём шла речь: нажмёт кнопки — продолжим в том же городе, а не в Минске
+        const base = r.query ? fromParams(r.query) : store.chat(chatId).draft;
+        store.setDialog(chatId, { ...base, talking: true }, null);
         await ctx.reply(agentHtml(r.text), { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
         if (r.search) await searchFor(ctx, r.search);
         if (r.contact) {
@@ -184,7 +188,8 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
   bot.callbackQuery(/^d:/, async (ctx) => {
     await closeButtons(ctx);
     const chat = store.chat(ctx.chat!.id);
-    const result = onChoice(withName(chat.draft, ctx), ctx.callbackQuery.data);
+    // Нажал кнопку — снова ведут правила
+    const result = onChoice(withName({ ...chat.draft, talking: false }, ctx), ctx.callbackQuery.data);
     if (result) await respond(ctx, result.draft, result.reply);
   });
 
@@ -221,9 +226,7 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
     const last = store.lastSearch(ctx.chat.id);
     const { draft, reply } = onText(withName(chat.draft, ctx), chat.step, text, rate, last?.params ?? null);
     // Вопросы и то, чего правила не поняли, — собеседнику; ответы анкеты и контакты — правилам
-    if (agent && isOpenStep(chat.step) && (reply.fallback || looksLikeQuestion(text) || needsAgent(text))) {
-      return talk(ctx, text);
-    }
+    if (agent && wantsAgent(chat.draft, chat.step, reply, text)) return talk(ctx, text);
     await respond(ctx, draft, reply);
   });
 
