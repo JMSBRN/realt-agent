@@ -299,3 +299,21 @@ test("count по району: страница района — точно, н�
   assert.equal(browser.calls.filter((c) => c.urls[0]!.includes("/pechi")).length, 1);
   assert.ok(browser.calls.length >= before);
 });
+
+test("deliver: район/улица ничего не дали — снимаем условие и ищем снова", async () => {
+  const { deliver } = await import("./delivery.ts");
+  const store = new Store(":memory:");
+  const params = {
+    deal: "sale" as const, city: "Борисов", rooms: [1], priceMinUsd: null, priceMaxUsd: 68000, areaMin: null,
+    notFirstFloor: false, notLastFloor: false, keywords: ["Днепровская"],
+  };
+  const searchId = store.addSearch(5, "x", params);
+  const task = store.addTask({ id: searchId, chat_id: 5 }, { site: "realt", params, maxPages: 3 }, false);
+  const sent: string[] = [];
+  const api = { sendMessage: async (_c: number, text: string) => void sent.push(text) } as never;
+  const research: Array<typeof params> = [];
+  await deliver(api, store, task, { status: "done", items: [], scanned: 60 }, { research: (_c, p) => void research.push(p as typeof params) });
+  assert.match(sent[0]!, /С условием «Днепровская» подходящих нет среди 60 объявлений/);
+  assert.deepEqual(research[0]!.keywords, []);
+  assert.equal(research[0]!.priceMaxUsd, 68000);
+});

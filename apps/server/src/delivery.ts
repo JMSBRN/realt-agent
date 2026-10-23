@@ -1,5 +1,5 @@
 import { InlineKeyboard, type Api } from "grammy";
-import { matchesParams, sortNewestFirst, type Listing, type TaskResult } from "@realt-agent/shared";
+import { matchesParams, sortNewestFirst, type Listing, type SearchParams, type TaskResult } from "@realt-agent/shared";
 import type { Store, Task } from "./db.ts";
 import { describeParams, listingCaption, listingLine } from "./format.ts";
 import { toPoints } from "./map-page.ts";
@@ -41,7 +41,14 @@ const nextSteps = (mapUrl: string | null = null) =>
     .text("📞 Связаться с риелтором", "f:contact");
 
 /** Отправляет итог задачи в Telegram. */
-export async function deliver(api: Api, store: Store, task: Task, result: TaskResult, publicUrl: string | null = null) {
+export interface DeliverOptions {
+  publicUrl?: string | null;
+  /** Запустить новый поиск — когда условие района/улицы ничего не дало и мы его снимаем. */
+  research?: (chatId: number, params: SearchParams) => void;
+}
+
+export async function deliver(api: Api, store: Store, task: Task, result: TaskResult, opts: DeliverOptions = {}) {
+  const publicUrl = opts.publicUrl ?? null;
   const chatId = task.chat_id;
   const params = task.payload.params;
 
@@ -61,6 +68,17 @@ export async function deliver(api: Api, store: Store, task: Task, result: TaskRe
   if (!listings.length) {
     if (task.only_new) return;
     const scanned = result.scanned != null ? ` среди ${result.scanned} объявлений` : "";
+    // Район или улица часто слишком узкие: не оставляем клиента в тупике — снимаем условие и ищем снова
+    if (params.keywords.length && opts.research) {
+      const relaxed = { ...params, keywords: [] };
+      await api.sendMessage(
+        chatId,
+        `С условием «${params.keywords.join(", ")}» подходящих нет${scanned}. ` +
+          `Смотрю другие варианты: ${describeParams(relaxed)} ⏳`,
+      );
+      opts.research(chatId, relaxed);
+      return;
+    }
     // Есть варианты дороже бюджета — предлагаем поднять потолок, как сделал бы риелтор
     if (result.cheapestUsd != null && params.priceMaxUsd != null && result.cheapestUsd > params.priceMaxUsd) {
       const raised = raisedBudget(result.cheapestUsd, params.deal);
