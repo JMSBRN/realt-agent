@@ -8,7 +8,7 @@ import { ExtensionBridge } from "./bridge.ts";
 import { Store } from "./db.ts";
 import type { ChatMessage, LLM, Tool } from "./llm.ts";
 import { retryDelayMs } from "./llm.ts";
-import { Realty, type Prober } from "./realty.ts";
+import { Realty, topStreets, type Prober } from "./realty.ts";
 
 const listing = (code: number, over: Partial<Listing> = {}): Listing => ({
   id: `realt:${code}`,
@@ -238,4 +238,18 @@ test("подборка после разговора — в том же горо
   assert.deepEqual(params.place, q.place);
   assert.deepEqual(params.rooms, [1]);
   assert.equal(params.priceMaxUsd, 50000);
+});
+
+test("topStreets: улицы из адресов объявлений", () => {
+  const items = [
+    listing(1, { address: "Борисов Гагарина ул. 12", town: "Борисов" }),
+    listing(2, { address: "Борисов Гагарина ул. 40 2", town: "Борисов" }),
+    listing(3, { address: "Борисов Строителей ул. 5", town: "Борисов" }),
+    listing(4, { address: "Гомель Речицкий просп. 8 Б" }),
+  ];
+  assert.deepEqual(topStreets(items, 2), [
+    { street: "Гагарина ул.", count: 2 },
+    { street: "Строителей ул.", count: 1 },
+  ]);
+  assert.equal(topStreets([listing(4, { address: "Гомель Речицкий просп. 8 Б", town: "Гомель" })])[0]!.street, "Речицкий просп.");
 });

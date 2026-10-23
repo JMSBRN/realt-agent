@@ -70,6 +70,29 @@ const short = (l: Listing) => ({
   url: l.url,
 });
 
+/**
+ * Улицы, где больше всего объявлений: «Гомель Речицкий просп. 8 Б» → «Речицкий просп.».
+ * Это опора для разговора о районах — вместо догадок модели.
+ */
+export function topStreets(items: Listing[], n = 8): Array<{ street: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const l of items) {
+    let rest = l.address.trim();
+    if (l.town && rest.startsWith(l.town)) rest = rest.slice(l.town.length).trim();
+    const words: string[] = [];
+    for (const w of rest.split(/\s+/)) {
+      if (/\d/.test(w)) break;
+      words.push(w);
+    }
+    const street = words.join(" ");
+    if (street.length >= 3) counts.set(street, (counts.get(street) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([street, count]) => ({ street, count }));
+}
+
 export class Realty {
   constructor(
     private browser: Prober,
@@ -174,6 +197,7 @@ export class Realty {
       minPriceUsd: minPriceUsd ?? prices[0] ?? null,
       medianPriceUsd: prices.length ? prices[Math.floor(prices.length / 2)] : null,
       examples: samples.slice(0, 3).map(short),
+      streets: topStreets(samples),
     };
   }
 
