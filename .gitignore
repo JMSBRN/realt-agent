@@ -13,3 +13,4 @@ supabase/.temp
 *.db-shm
 *.db-wal
 *.tsbuildinfo
+google-key*.json

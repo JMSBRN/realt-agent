@@ -3,7 +3,9 @@ import { ExtensionBridge } from "./bridge.ts";
 import { config } from "./config.ts";
 import { Store } from "./db.ts";
 import { deliver } from "./delivery.ts";
+import { LeadService } from "./lead-service.ts";
 import { startMapServer } from "./map-page.ts";
+import { GoogleSheets } from "./sheets.ts";
 
 const TASK_TIMEOUT_MIN = 30;
 
@@ -12,8 +14,18 @@ store.requeueRunning(); // задачи, прерванные прошлым п�
 
 // bot создаётся после bridge, но обработчик результатов вызывается позже — к этому моменту он уже есть
 let bot: ReturnType<typeof createBot>;
+let leads: LeadService;
 const bridge = new ExtensionBridge(store, (task, result) => deliver(bot.api, store, task, result, config.publicUrl));
-bot = createBot(store, bridge);
+bot = createBot(store, bridge, (chatId, draft, tg) => leads.save(chatId, draft, tg));
+
+const sheets =
+  config.googleKeyFile && config.googleSheet
+    ? GoogleSheets.fromKeyFile(config.googleKeyFile, config.googleSheet, config.googleSheetTab)
+    : null;
+if (!sheets) console.log("[lead] Google Sheets не настроен — лиды сохраняются только в базе");
+leads = new LeadService(store, bot.api, sheets, config.realtorChatIds);
+setInterval(() => leads.sync(), 60_000);
+leads.sync();
 
 bridge.listen(config.wsHost, config.wsPort, config.wsToken);
 if (config.publicUrl) startMapServer(store, config.mapHost, config.mapPort);

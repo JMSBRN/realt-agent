@@ -1,10 +1,22 @@
-import { Bot, InlineKeyboard, type Context } from "grammy";
+import { Bot, InlineKeyboard, Keyboard, type Context } from "grammy";
 import type { TaskPayload } from "@realt-agent/shared";
 import type { ExtensionBridge } from "./bridge.ts";
 import { config } from "./config.ts";
 import type { Search, Store } from "./db.ts";
-import { advance, fromParams, greeting, onChoice, onText, question, type Draft, type Reply } from "./dialogue.ts";
+import {
+  advance,
+  fromParams,
+  greeting,
+  onChoice,
+  onContact,
+  onText,
+  question,
+  startContact,
+  type Draft,
+  type Reply,
+} from "./dialogue.ts";
 import { describeParams, esc } from "./format.ts";
+import type { TgUser } from "./leads.ts";
 
 const MAX_PAGES = 3;
 const usd = (n: number) => "$" + Math.round(n).toLocaleString("ru-RU").replace(/[\s\u00a0,]/g, " ");
@@ -14,7 +26,7 @@ const HELP = `Я подбираю квартиры в Минске на realt.by
 Можно сразу одной фразой: <i>куплю двушку от 60 до 80 тыс $, не первый этаж</i>
 Если назвать вилку бюджета — ищу сразу, без лишних вопросов.
 
-/new — новый поиск
+/new — новый поиск (быстрый или подробный подбор с риелтором)
 /watch — присылать новые объявления по последнему поиску
 /stop — отключить подписки
 /format — фото с описанием или только ссылки
@@ -27,7 +39,18 @@ export function enqueue(store: Store, bridge: ExtensionBridge, search: Pick<Sear
   bridge.flush();
 }
 
-export function createBot(store: Store, bridge: ExtensionBridge): Bot {
+export type LeadHandler = (chatId: number, draft: Draft, tg: TgUser) => Promise<void>;
+
+const tgUser = (ctx: Context): TgUser => ({
+  id: ctx.from!.id,
+  username: ctx.from!.username,
+  firstName: ctx.from!.first_name,
+});
+
+/** Черновик из базы с именем из Telegram — подсказкой на вопрос «как к вам обращаться». */
+const withName = (draft: Draft, ctx: Context): Draft => ({ ...draft, tgName: ctx.from?.first_name });
+
+export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHandler): Bot {
   const bot = new Bot(config.botToken);
   const rate = Number(config.usdBynRate);
 
@@ -46,12 +69,25 @@ export function createBot(store: Store, bridge: ExtensionBridge): Bot {
     const chatId = ctx.chat!.id;
     store.setDialog(chatId, draft, reply.step);
 
-    const keyboard = reply.buttons && InlineKeyboard.from(reply.buttons.map((r) => r.map((b) => InlineKeyboard.text(b.text, b.data))));
     let text = esc(reply.text);
     if (reply.search && !bridge.connected) {
       text += "\n\n🔴 Браузер сейчас не в сети. Откройте Chrome — поиск начнётся автоматически.";
     }
-    await ctx.reply(text, { parse_mode: "HTML", reply_markup: keyboard });
+
+    // Клавиатуру «Поделиться номером» убираем отдельным сообщением: в одном нельзя и убрать её, и показать кнопки
+    if (reply.removeKeyboard) {
+      const [head, ...rest] = text.split("\n\n");
+      const hasHead = rest.length > 0 && head!.length < 120;
+      await ctx.reply(hasHead ? head! : "👍", { parse_mode: "HTML", reply_markup: { remove_keyboard: true } });
+      if (hasHead) text = rest.join("\n\n");
+    }
+
+    const reply_markup = reply.contactRequest
+      ? new Keyboard().requestContact("📱 Поделиться номером").row().text("Без телефона").resized().oneTime()
+      : reply.buttons && InlineKeyboard.from(reply.buttons.map((r) => r.map((b) => InlineKeyboard.text(b.text, b.data))));
+    await ctx.reply(text, { parse_mode: "HTML", reply_markup });
+
+    if (reply.lead) await onLead(chatId, draft, tgUser(ctx));
 
     if (reply.search) {
       const searchId = store.addSearch(chatId, describeParams(reply.search), reply.search);
@@ -65,7 +101,7 @@ export function createBot(store: Store, bridge: ExtensionBridge): Bot {
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
   }
 
-  bot.command(["start", "new"], (ctx) => respond(ctx, {}, greeting()));
+  bot.command(["start", "new"], (ctx) => respond(ctx, withName({}, ctx), greeting()));
   bot.command("help", (ctx) => ctx.reply(HELP, { parse_mode: "HTML" }));
 
   bot.command("status", (ctx) =>
@@ -102,7 +138,7 @@ export function createBot(store: Store, bridge: ExtensionBridge): Bot {
   bot.callbackQuery(/^d:/, async (ctx) => {
     await closeButtons(ctx);
     const chat = store.chat(ctx.chat!.id);
-    const result = onChoice(chat.draft, ctx.callbackQuery.data);
+    const result = onChoice(withName(chat.draft, ctx), ctx.callbackQuery.data);
     if (result) await respond(ctx, result.draft, result.reply);
   });
 
@@ -110,11 +146,15 @@ export function createBot(store: Store, bridge: ExtensionBridge): Bot {
   bot.callbackQuery(/^f:/, async (ctx) => {
     await closeButtons(ctx);
     const [, action, value] = ctx.callbackQuery.data.split(":");
-    if (action === "new") return respond(ctx, {}, greeting());
+    if (action === "new") return respond(ctx, withName({}, ctx), greeting());
     if (action === "watch") return watchLast(ctx);
 
     const last = store.lastSearch(ctx.chat!.id);
-    if (!last) return respond(ctx, {}, greeting());
+    if (action === "contact") {
+      const { draft, reply } = startContact(last?.params ?? null, ctx.from?.first_name);
+      return respond(ctx, draft, reply);
+    }
+    if (!last) return respond(ctx, withName({}, ctx), greeting());
     const draft = fromParams(last.params);
 
     if (action === "max") {
@@ -133,7 +173,15 @@ export function createBot(store: Store, bridge: ExtensionBridge): Bot {
     if (text.startsWith("/")) return ctx.reply(HELP, { parse_mode: "HTML" });
     const chat = store.chat(ctx.chat.id);
     const last = store.lastSearch(ctx.chat.id);
-    const { draft, reply } = onText(chat.draft, chat.step, text, rate, last?.params ?? null);
+    const { draft, reply } = onText(withName(chat.draft, ctx), chat.step, text, rate, last?.params ?? null);
+    await respond(ctx, draft, reply);
+  });
+
+  // Номер, отправленный кнопкой «Поделиться номером»
+  bot.on("message:contact", async (ctx) => {
+    const chat = store.chat(ctx.chat.id);
+    if (chat.step !== "c_phone") return ctx.reply("Спасибо! Номер пригодится, когда дойдём до контактов 🙂");
+    const { draft, reply } = onContact(withName(chat.draft, ctx), ctx.message.contact.phone_number);
     await respond(ctx, draft, reply);
   });
 

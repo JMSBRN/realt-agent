@@ -21,6 +21,15 @@ export const config = {
   publicUrl: process.env.PUBLIC_URL?.replace(/\/+$/, "") || null,
   mapHost: process.env.MAP_HOST ?? "0.0.0.0",
   mapPort: Number(process.env.MAP_PORT ?? 8080),
+  // Лиды: таблица Google Sheets (сервисный аккаунт) и чаты риелторов для уведомлений. Всё необязательно.
+  googleKeyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE || null,
+  googleSheet: process.env.GOOGLE_SHEET || null,
+  googleSheetTab: process.env.GOOGLE_SHEET_TAB || null,
+  realtorChatIds: (process.env.REALTOR_CHAT_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map(Number),
   watchIntervalMin: Number(process.env.WATCH_INTERVAL_MIN ?? 30),
   dbPath: process.env.DB_PATH ?? "realt-agent.db",
 };

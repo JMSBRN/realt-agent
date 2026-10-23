@@ -36,7 +36,9 @@ const nextSteps = (mapUrl: string | null = null) =>
     .text("🏠 Другие комнаты", "f:rooms")
     .row()
     .text("👁 Следить за новыми", "f:watch")
-    .text("🔄 Новый поиск", "f:new");
+    .text("🔄 Новый поиск", "f:new")
+    .row()
+    .text("📞 Связаться с риелтором", "f:contact");
 
 /** Отправляет итог задачи в Telegram. */
 export async function deliver(api: Api, store: Store, task: Task, result: TaskResult, publicUrl: string | null = null) {

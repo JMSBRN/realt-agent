@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS tasks (
   finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS tasks_status_idx ON tasks (status);
+CREATE TABLE IF NOT EXISTS leads (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id INTEGER NOT NULL,
+  row TEXT NOT NULL,
+  synced INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 CREATE TABLE IF NOT EXISTS maps (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -199,6 +206,22 @@ export class Store {
          WHERE status IN ('queued', 'running') AND created_at < datetime('now', ?)`,
       )
       .run(`-${minutes} minutes`);
+  }
+
+  addLead(chatId: number, row: string[]): number {
+    const res = this.db.prepare("INSERT INTO leads (chat_id, row) VALUES (?, ?)").run(chatId, JSON.stringify(row));
+    return Number(res.lastInsertRowid);
+  }
+
+  unsyncedLeads(): Array<{ id: number; row: string[] }> {
+    return (this.db.prepare("SELECT id, row FROM leads WHERE synced = 0 ORDER BY id").all() as Row[]).map((r) => ({
+      id: r.id as number,
+      row: JSON.parse(r.row as string),
+    }));
+  }
+
+  markLeadSynced(id: number) {
+    this.db.prepare("UPDATE leads SET synced = 1 WHERE id = ?").run(id);
   }
 
   /** Сохраняет карту результатов; id — случайный, его не угадать по соседним. */
