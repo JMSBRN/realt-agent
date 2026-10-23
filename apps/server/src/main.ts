@@ -34,6 +34,7 @@ const agent = config.llmApiKey
       new Realty(bridge, store),
       store,
       config.usdBynRate,
+      config.publicUrl ? { publicUrl: config.publicUrl, addMap: (title, points) => store.addMap(title, points) } : null,
     )
   : null;
 if (!agent) console.log("[agent] LLM_API_KEY не задан — бот отвечает только по кнопкам и правилам");
