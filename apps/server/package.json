@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.13" },
+  "engines": {
+    "node": ">=22.13"
+  },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "start": "tsx --env-file-if-exists=.env src/main.ts",
@@ -11,12 +13,10 @@
     "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.1.0",
     "@realt-agent/shared": "workspace:*",
     "grammy": "^1.46.0",
     "tsx": "^4.23.15",
-    "ws": "^8.22.0",
-    "zod": "^3.25.76"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

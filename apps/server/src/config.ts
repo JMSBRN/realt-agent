@@ -13,7 +13,6 @@ export const config = {
       .filter(Boolean)
       .map(Number),
   ),
-  claudeModel: process.env.CLAUDE_MODEL ?? "claude-opus-5-5",
   usdBynRate: process.env.USD_BYN_RATE ?? "3.0",
   wsHost: process.env.WS_HOST ?? "127.0.0.1",
   wsPort: Number(process.env.WS_PORT ?? 8765),

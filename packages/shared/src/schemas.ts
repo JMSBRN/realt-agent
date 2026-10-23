@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 
-/** Параметры поиска, которые LLM извлекает из текста пользователя. */
+/** Параметры поиска квартиры. */
 export const SearchParamsSchema = z.object({
   deal: z.enum(["sale", "rent"]).describe("sale — купить, rent — снять на длительный срок"),
   city: z.string().describe("Город в именительном падеже, например «Минск»"),
@@ -13,13 +13,6 @@ export const SearchParamsSchema = z.object({
   keywords: z.array(z.string()).describe("Слова, которые должны встречаться в объявлении (район, улица, «ремонт»)"),
 });
 export type SearchParams = z.infer<typeof SearchParamsSchema>;
-
-/** Ответ разборщика: либо готовые параметры, либо уточняющий вопрос. */
-export const ParseResultSchema = z.object({
-  params: SearchParamsSchema.nullable().describe("Заполнено, если данных достаточно для поиска"),
-  question: z.string().nullable().describe("Один короткий уточняющий вопрос, если данных не хватает"),
-});
-export type ParseResult = z.infer<typeof ParseResultSchema>;
 
 export type Site = "realt";
 
@@ -54,8 +47,14 @@ export type TaskStatus = "queued" | "running" | "done" | "captcha" | "failed";
 
 /** То, что расширение отправляет на сервер по итогам задачи. */
 export const TaskResultSchema = z.discriminatedUnion("status", [
-  // scanned — сколько объявлений расширение просмотрело до фильтрации
-  z.object({ status: z.literal("done"), items: z.array(ListingSchema).max(500), scanned: z.number().optional() }),
+  z.object({
+    status: z.literal("done"),
+    items: z.array(ListingSchema).max(500),
+    // сколько объявлений расширение просмотрело до фильтрации
+    scanned: z.number().optional(),
+    // минимальная цена среди подходящих по всему, кроме цены, — чтобы предложить поднять бюджет
+    cheapestUsd: z.number().optional(),
+  }),
   z.object({ status: z.literal("captcha") }),
   z.object({ status: z.literal("failed"), error: z.string().max(2000) }),
 ]);

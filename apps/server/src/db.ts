@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { SearchParams, TaskPayload, TaskStatus } from "@realt-agent/shared";
+import type { Draft, Step } from "./dialogue.ts";
 
 export interface Chat {
   chat_id: number;
-  pending_query: string | null;
   result_format: "cards" | "links";
   results_limit: number;
+  /** Черновик диалога и вопрос, на который ждём ответ (null — диалога нет). */
+  draft: Draft;
+  step: Step | null;
 }
 
 export interface Search {
@@ -29,7 +32,6 @@ export interface Task {
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS chats (
   chat_id INTEGER PRIMARY KEY,
-  pending_query TEXT,
   result_format TEXT NOT NULL DEFAULT 'cards',
   results_limit INTEGER NOT NULL DEFAULT 5
 );
@@ -88,15 +90,26 @@ export class Store {
     this.db = new DatabaseSync(path);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     this.db.exec(SCHEMA);
+    // Колонки, добавленные после первой версии: в существующей базе их ещё нет
+    const columns = (this.db.prepare("PRAGMA table_info(chats)").all() as Row[]).map((c) => c.name);
+    if (!columns.includes("draft")) this.db.exec("ALTER TABLE chats ADD COLUMN draft TEXT NOT NULL DEFAULT '{}'");
+    if (!columns.includes("step")) this.db.exec("ALTER TABLE chats ADD COLUMN step TEXT");
   }
 
   chat(chatId: number): Chat {
     this.db.prepare("INSERT OR IGNORE INTO chats (chat_id) VALUES (?)").run(chatId);
-    return this.db.prepare("SELECT * FROM chats WHERE chat_id = ?").get(chatId) as unknown as Chat;
+    const r = this.db.prepare("SELECT * FROM chats WHERE chat_id = ?").get(chatId) as Row;
+    return {
+      chat_id: r.chat_id as number,
+      result_format: r.result_format as Chat["result_format"],
+      results_limit: r.results_limit as number,
+      draft: JSON.parse((r.draft as string) || "{}"),
+      step: (r.step as Step | null) ?? null,
+    };
   }
 
-  setPendingQuery(chatId: number, query: string | null) {
-    this.db.prepare("UPDATE chats SET pending_query = ? WHERE chat_id = ?").run(query, chatId);
+  setDialog(chatId: number, draft: Draft, step: Step | null) {
+    this.db.prepare("UPDATE chats SET draft = ?, step = ? WHERE chat_id = ?").run(JSON.stringify(draft), step, chatId);
   }
 
   setFormat(chatId: number, format: Chat["result_format"]) {

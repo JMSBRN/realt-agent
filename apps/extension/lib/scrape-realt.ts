@@ -77,12 +77,17 @@ function waitForComplete(tabId: number, timeoutMs = 45_000): Promise<void> {
 }
 
 /** Открывает выдачу realt.by в фоновой вкладке, листает страницы и возвращает подходящие объявления. */
-export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<{ items: Listing[]; scanned: number }> {
+export async function scrapeRealt({
+  params,
+  maxPages,
+}: TaskPayload): Promise<{ items: Listing[]; scanned: number; cheapestUsd?: number }> {
   const tab = await browser.tabs.create({ url: "about:blank", active: false });
   const tabId = tab.id!;
   let keepTab = false;
   const byId = new Map<string, Listing>();
   let scanned = 0;
+  let cheapestUsd: number | undefined;
+  const anyPrice = { ...params, priceMinUsd: null, priceMaxUsd: null };
 
   try {
     for (let page = 1; page <= maxPages; page++) {
@@ -110,6 +115,9 @@ export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<{ 
       for (const raw of data.objects) {
         const listing = mapRealtObject(raw, params.deal);
         if (matchesParams(listing, params)) byId.set(listing.id, listing);
+        else if (listing.priceUsd != null && matchesParams(listing, anyPrice)) {
+          cheapestUsd = Math.min(cheapestUsd ?? Infinity, listing.priceUsd);
+        }
       }
 
       const lastPage = !data.objects.length || page * data.pageSize >= data.totalCount;
@@ -119,5 +127,5 @@ export async function scrapeRealt({ params, maxPages }: TaskPayload): Promise<{ 
   } finally {
     if (!keepTab) await browser.tabs.remove(tabId).catch(() => {});
   }
-  return { items: [...byId.values()], scanned };
+  return { items: [...byId.values()], scanned, cheapestUsd };
 }
