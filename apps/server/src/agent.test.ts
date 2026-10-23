@@ -130,6 +130,9 @@ test("agent: сам узнаёт число на realt.by и отвечает п
   const agent = new Agent(llm, new Realty(browser, store), store, "3.0");
   const r = await agent.reply(7, "Сколько однушек в Гомеле?");
   assert.equal(r.text, "Сейчас на realt.by 112 однокомнатных квартир в Гомеле.");
+  // о чём шла речь — для кнопок и подборки: Гомель, однушки
+  assert.equal(r.query?.city, "Гомель");
+  assert.deepEqual(r.query?.rooms, [1]);
   const toolMsg = llm.seen[1]!.find((m) => m.role === "tool")!;
   assert.match(toolMsg.content as string, /"count":112/);
   // разговор запоминается для следующих вопросов
@@ -222,4 +225,17 @@ test("wantsAgent: после ответа собеседника уточнен�
   assert.ok(!rules({}, null, "куплю двушку в Минске до 80 тыс"));
   assert.ok(rules({}, "mode", "сколько однушек в гомеле"));
   assert.ok(!rules({ talking: true }, "c_phone", "+375291112233"));
+});
+
+test("подборка после разговора — в том же городе", async () => {
+  const { fromParams, toParams } = await import("./dialogue.ts");
+  const store = new Store(":memory:");
+  const realty = new Realty(new FakeBrowser(() => done()), store);
+  const q = await realty.toParams({ deal: "sale", type: "flat", town: "Гомель", rooms: [1] });
+  // клиент нажал «Изменить бюджет» или выбрал бюджет кнопкой — параметры поиска остаются гомельскими
+  const params = toParams({ ...fromParams(q), budget: { min: null, max: 50000 } });
+  assert.equal(params.city, "Гомель");
+  assert.deepEqual(params.place, q.place);
+  assert.deepEqual(params.rooms, [1]);
+  assert.equal(params.priceMaxUsd, 50000);
 });

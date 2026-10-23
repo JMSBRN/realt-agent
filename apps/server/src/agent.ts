@@ -19,6 +19,8 @@ export interface AgentReply {
   search?: SearchParams;
   /** Клиент хочет живого риелтора — начать сбор контактов. */
   contact?: boolean;
+  /** О чём шла речь (город, тип, комнаты) — чтобы кнопки и подборка продолжали с того же места. */
+  query?: SearchParams;
 }
 
 const MAX_TOOL_ROUNDS = 5;
@@ -172,14 +174,15 @@ export class Agent {
       switch (call.function.name) {
         case "count_listings":
           if (!this.realty.online) return offline;
-          return JSON.stringify(await this.realty.count(toQuery(args)));
+          out.query = await this.realty.toParams(toQuery(args));
+          return JSON.stringify(await this.realty.countFor(out.query));
         case "new_buildings":
           if (!this.realty.online) return offline;
           return JSON.stringify(
             await this.realty.newBuildings(toQuery(args).town, toQuery(args).region),
           );
         case "show_listings":
-          out.search = await this.realty.toParams(toQuery(args));
+          out.search = out.query = await this.realty.toParams(toQuery(args));
           return this.realty.online
             ? "Подборка запущена: карточки с фото придут клиенту отдельными сообщениями примерно через минуту."
             : "Подборка поставлена в очередь, но браузер с realt.by сейчас не в сети — карточки придут, как только он подключится.";

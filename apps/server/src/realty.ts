@@ -123,7 +123,10 @@ export class Realty {
    * иначе — оценка по доле подходящих.
    */
   async count(q: MarketQuery) {
-    const params = await this.toParams(q);
+    return this.countFor(await this.toParams(q));
+  }
+
+  async countFor(params: SearchParams) {
     const place = params.place!;
     const path = listPath(params.deal, params.type!);
     const ownFilters =

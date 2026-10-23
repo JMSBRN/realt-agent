@@ -126,8 +126,10 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
         const chat = store.chat(chatId);
         const context = chat.draft.deal ? describeParams(toParams(chat.draft)) : "";
         const r = await agent!.reply(chatId, text, context);
-        // Дальше уточнения — тоже собеседнику; вопрос кнопками, если был, снимаем
-        store.setDialog(chatId, { ...store.chat(chatId).draft, talking: true }, null);
+        // Дальше уточнения — тоже собеседнику; вопрос кнопками, если был, снимаем.
+        // Запоминаем, о чём шла речь: нажмёт кнопки — продолжим в том же городе, а не в Минске
+        const base = r.query ? fromParams(r.query) : store.chat(chatId).draft;
+        store.setDialog(chatId, { ...base, talking: true }, null);
         await ctx.reply(agentHtml(r.text), { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
         if (r.search) await searchFor(ctx, r.search);
         if (r.contact) {
