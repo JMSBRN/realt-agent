@@ -1,0 +1,268 @@
+import { areaPageUrls, townAreas } from "./areas.ts";
+import {
+  BELARUS,
+  buildListUrl,
+  DEAL_LABELS,
+  knownPlace,
+  listPath,
+  townPageUrl,
+  townPageUrls,
+  TYPE_LABELS,
+  type Deal,
+  type Listing,
+  type Place,
+  type ProbePayload,
+  type ProbeResult,
+  type PropertyType,
+  type SearchParams,
+} from "@realt-agent/shared";
+
+/**
+ * Знания о рынке для собеседника: сколько объявлений, какие есть новостройки, где искать.
+ * Все цифры — живые, с realt.by: браузер клиента открывает выдачу и читает её.
+ */
+
+export interface Prober {
+  connected: boolean;
+  probe(payload: ProbePayload, timeoutMs?: number): Promise<ProbeResult>;
+}
+
+export interface PlaceCache {
+  cachedPlace(key: string): Place | null;
+  cachePlace(key: string, place: Place): void;
+}
+
+export interface MarketQuery {
+  deal: Deal;
+  type: PropertyType;
+  town?: string | null;
+  region?: string | null;
+  /** Район или микрорайон города: «Октябрьский район», «Уручье», «Печи». */
+  area?: string | null;
+  rooms?: number[];
+  priceMinUsd?: number | null;
+  priceMaxUsd?: number | null;
+  areaMin?: number | null;
+  notFirstFloor?: boolean;
+  notLastFloor?: boolean;
+  keywords?: string[];
+}
+
+/** Сколько страниц выдачи (по 60 объявлений) просматривать, чтобы посчитать по нашим фильтрам. */
+const FILTER_PAGES = 5;
+
+export class RealtyError extends Error {}
+
+const ROOMS_TYPES: PropertyType[] = ["flat", "room", "newbuild"];
+
+function probeError(r: Exclude<ProbeResult, { status: "done" }>): RealtyError {
+  if (r.status === "captcha") return new RealtyError("realt.by показал проверку «я не робот» — её нужно пройти в браузере");
+  if (r.status === "notfound") return new RealtyError("такой страницы на realt.by нет");
+  return new RealtyError(r.error);
+}
+
+const short = (l: Listing) => ({
+  title: l.title.slice(0, 120),
+  priceUsd: l.priceUsd,
+  pricePerM2Usd: l.pricePerM2Usd ?? null,
+  rooms: l.rooms,
+  areaTotal: l.areaTotal,
+  areaLand: l.areaLand ?? null,
+  storey: l.storey && l.storeys ? `${l.storey}/${l.storeys}` : null,
+  address: l.address,
+  ready: l.ready ?? null,
+  url: l.url,
+});
+
+/**
+ * Улицы, где больше всего объявлений: «Гомель Речицкий просп. 8 Б» → «Речицкий просп.».
+ * Это опора для разговора о районах — вместо догадок модели.
+ */
+export function topStreets(items: Listing[], n = 8): Array<{ street: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const l of items) {
+    let rest = l.address.trim();
+    if (l.town && rest.startsWith(l.town)) rest = rest.slice(l.town.length).trim();
+    const words: string[] = [];
+    for (const w of rest.split(/\s+/)) {
+      if (/\d/.test(w)) break;
+      words.push(w);
+    }
+    const street = words.join(" ");
+    if (street.length >= 3) counts.set(street, (counts.get(street) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, n)
+    .map(([street, count]) => ({ street, count }));
+}
+
+export class Realty {
+  constructor(
+    private browser: Prober,
+    private cache: PlaceCache,
+  ) {}
+
+  get online(): boolean {
+    return this.browser.connected;
+  }
+
+  /** Город, область или вся страна. Незнакомый город ищем по страницам realt.by и запоминаем. */
+  async resolvePlace(town?: string | null, region?: string | null): Promise<Place> {
+    if (!town?.trim()) return region?.trim() ? (knownPlace(region) ?? BELARUS) : BELARUS;
+    const known = knownPlace(town);
+    if (known) return known;
+    const key = `${town}|${region ?? ""}`.toLowerCase().trim();
+    const cached = this.cache.cachedPlace(key);
+    if (cached) return cached;
+
+    const urls = townPageUrls(town, region);
+    const r = await this.browser.probe({ urls, maxPages: 1, listPath: "/sale/flats/" });
+    if (r.status === "notfound") throw new RealtyError(`не нашёл «${town}» на realt.by — уточните название или область`);
+    if (r.status !== "done") throw probeError(r);
+    if (!r.address) throw new RealtyError(`realt.by не распознал «${town}»`);
+    const place = { title: r.geoTitle?.replace(/^г\.\s*/, "") || town, address: r.address };
+    this.cache.cachePlace(key, place);
+    return place;
+  }
+
+  /**
+   * Район или микрорайон: realt.by знает их как отдельные страницы, и тогда счёт точный.
+   * Не нашёлся — null: ищем по упоминанию в объявлениях.
+   */
+  async resolveArea(town: string, region: string | null | undefined, area: string): Promise<Place | null> {
+    const key = `area|${town}|${area}`.toLowerCase().trim();
+    const cached = this.cache.cachedPlace(key);
+    if (cached) return cached.address ? cached : null;
+    const base = townPageUrl(town, region ?? townAreas(town)?.region);
+    const urls = base ? areaPageUrls(base, area) : [];
+    if (!urls.length) return null;
+    const r = await this.browser.probe({ urls, maxPages: 1, listPath: "/sale/flats/" });
+    if (r.status !== "done" && r.status !== "notfound") throw probeError(r);
+    const exact = r.status === "done" && r.address && (r.address.townDistrictUuid || r.address.townSubDistrictUuid);
+    const place: Place = exact
+      ? { title: `${town}, ${r.geoTitle ?? area}`, address: r.address }
+      : { title: area, address: null }; // запоминаем и неудачу, чтобы не открывать страницы снова
+    this.cache.cachePlace(key, place);
+    return exact ? place : null;
+  }
+
+  async toParams(q: MarketQuery): Promise<SearchParams> {
+    listPath(q.deal, q.type); // проверка, что такой раздел есть
+    let place = await this.resolvePlace(q.town, q.region);
+    const keywords = [...(q.keywords ?? [])];
+    if (q.area?.trim() && q.town?.trim()) {
+      const area = await this.resolveArea(place.title, q.region, q.area.trim());
+      if (area) place = area;
+      else if (!keywords.includes(q.area.trim())) keywords.push(q.area.trim());
+    }
+    return {
+      deal: q.deal,
+      type: q.type,
+      city: place.title,
+      place,
+      rooms: ROOMS_TYPES.includes(q.type) ? [...new Set(q.rooms ?? [])].filter((n) => n >= 1 && n <= 5).sort() : [],
+      priceMinUsd: q.priceMinUsd ?? null,
+      priceMaxUsd: q.priceMaxUsd ?? null,
+      areaMin: q.areaMin ?? null,
+      notFirstFloor: q.notFirstFloor ?? false,
+      notLastFloor: q.notLastFloor ?? false,
+      keywords,
+    };
+  }
+
+  /**
+   * Сколько объявлений. Место и одно значение комнат фильтрует сам сайт — число точное.
+   * Цену, площадь, этаж и слова проверяем по первым страницам выдачи: если просмотрели всё — точно,
+   * иначе — оценка по доле подходящих.
+   */
+  async count(q: MarketQuery, examples = 3) {
+    return this.countFor(await this.toParams(q), examples);
+  }
+
+  /** examples — сколько объявлений вернуть для разговора (до 10: «пришли списком с ценами»). */
+  async countFor(params: SearchParams, examples = 3) {
+    const { total, matchedEstimate, exact, minPriceUsd, samples, ownFilters } = await this.scan(params);
+    const prices = samples.map((l) => l.priceUsd).filter((p): p is number => p != null).sort((a, b) => a - b);
+    const siteRooms = params.rooms.length === 1 && params.rooms[0]! < 5 ? params.rooms[0]! : null;
+    return {
+      what: `${DEAL_LABELS[params.deal]} ${TYPE_LABELS[params.type!]}`,
+      place: params.place!.title,
+      count: matchedEstimate,
+      exact,
+      totalWithoutOurFilters: ownFilters ? total : undefined,
+      minPriceUsd: minPriceUsd ?? prices[0] ?? null,
+      medianPriceUsd: prices.length ? prices[Math.floor(prices.length / 2)] : null,
+      areaBy: params.place?.address?.townDistrictUuid || params.place?.address?.townSubDistrictUuid
+        ? "страница района на realt.by — число точное"
+        : params.keywords.length
+          ? "по упоминанию в тексте объявления"
+          : undefined,
+      // Настоящая ссылка на выдачу realt.by (место и комнаты; цену сайт в ссылке не принимает)
+      realtUrl: buildListUrl({ deal: params.deal, type: params.type!, place: params.place!, rooms: siteRooms }),
+      examples: samples.slice(0, Math.min(Math.max(examples, 1), 10)).map(short),
+      streets: topStreets(samples),
+    };
+  }
+
+  /** Подходящие объявления (до 60 на запрос к сайту) — для карты. */
+  async listings(params: SearchParams): Promise<{ count: number; items: Listing[] }> {
+    const { matchedEstimate, samples } = await this.scan(params);
+    return { count: matchedEstimate, items: samples };
+  }
+
+  private async scan(params: SearchParams) {
+    const place = params.place!;
+    const path = listPath(params.deal, params.type!);
+    const ownFilters =
+      params.priceMinUsd != null ||
+      params.priceMaxUsd != null ||
+      params.areaMin != null ||
+      params.notFirstFloor ||
+      params.notLastFloor ||
+      params.keywords.length > 0;
+    const siteRooms = params.rooms.length && params.rooms.every((n) => n < 5) ? params.rooms : [null];
+
+    let total = 0;
+    let matchedEstimate = 0;
+    let exact = true;
+    let minPriceUsd: number | null = null;
+    const samples: Listing[] = [];
+    // «1 или 2 комнаты» — по запросу на каждое значение: так числа точные
+    for (const rooms of siteRooms) {
+      const filter = ownFilters || (rooms === null && params.rooms.length) ? params : null;
+      const r = await this.browser.probe({
+        urls: [buildListUrl({ deal: params.deal, type: params.type!, place, rooms }, 1)],
+        maxPages: filter ? FILTER_PAGES : 1,
+        listPath: path,
+        filter,
+      });
+      if (r.status !== "done") throw probeError(r);
+      total += r.totalCount;
+      if (!filter) matchedEstimate += r.totalCount;
+      else if (r.scanned >= r.totalCount) matchedEstimate += r.matched;
+      else {
+        exact = false;
+        matchedEstimate += r.scanned ? Math.round((r.matched / r.scanned) * r.totalCount) : 0;
+      }
+      if (r.minPriceUsd != null && !filter) minPriceUsd = Math.min(minPriceUsd ?? Infinity, r.minPriceUsd);
+      samples.push(...r.items);
+    }
+
+    return { total, matchedEstimate, exact, minPriceUsd, samples, ownFilters };
+  }
+
+  /** Новостройки и жилые комплексы — в том порядке, в каком их показывает realt.by. */
+  async newBuildings(town?: string | null, region?: string | null) {
+    const place = await this.resolvePlace(town, region);
+    const r = await this.browser.probe({
+      urls: [buildListUrl({ deal: "sale", type: "newbuild", place }, 1)],
+      maxPages: 1,
+      listPath: "/newflats/",
+    });
+    if (r.status !== "done") throw probeError(r);
+    // Без места раздел новостроек показывает Минскую область — называем то, что показал сайт
+    const title = place.address ? place.title : (r.geoTitle ?? "Минск и Минская область");
+    return { place: title, count: r.totalCount, buildings: r.items.slice(0, 10).map(short) };
+  }
+}

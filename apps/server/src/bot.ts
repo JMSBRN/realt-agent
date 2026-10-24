@@ -1,5 +1,6 @@
 import { Bot, InlineKeyboard, Keyboard, type Context } from "grammy";
-import type { TaskPayload } from "@realt-agent/shared";
+import type { SearchParams, TaskPayload } from "@realt-agent/shared";
+import type { Agent } from "./agent.ts";
 import type { ExtensionBridge } from "./bridge.ts";
 import { config } from "./config.ts";
 import type { Search, Store } from "./db.ts";
@@ -13,19 +14,23 @@ import {
   onToggle,
   question,
   startContact,
+  toParams,
+  wantsAgent,
   type Draft,
   type Reply,
 } from "./dialogue.ts";
-import { describeParams, esc } from "./format.ts";
+import { agentHtml, describeParams, esc } from "./format.ts";
 import type { TgUser } from "./leads.ts";
 
 const MAX_PAGES = 3;
 const usd = (n: number) => "$" + Math.round(n).toLocaleString("ru-RU").replace(/[\s\u00a0,]/g, " ");
 
-const HELP = `Я подбираю квартиры в Минске на realt.by — как риелтор: спрошу, что вам важно, и пришлю подходящие варианты.
+const HELP = `Я подбираю недвижимость на realt.by — как риелтор: спрошу, что вам важно, и пришлю подходящие варианты.
 
 Можно сразу одной фразой: <i>куплю двушку от 60 до 80 тыс $, не первый этаж</i>
 Если назвать вилку бюджета — ищу сразу, без лишних вопросов.
+
+Можно просто спросить: <i>сколько однушек в Гомеле?</i>, <i>какие новостройки в Минске?</i>, <i>почём дома под Брестом?</i>
 
 /new — новый поиск (быстрый или подробный подбор с риелтором)
 /watch — присылать новые объявления по последнему поиску
@@ -51,7 +56,7 @@ const tgUser = (ctx: Context): TgUser => ({
 /** Черновик из базы с именем из Telegram — подсказкой на вопрос «как к вам обращаться». */
 const withName = (draft: Draft, ctx: Context): Draft => ({ ...draft, tgName: ctx.from?.first_name });
 
-export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHandler): Bot {
+export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHandler, agent: Agent | null = null): Bot {
   const bot = new Bot(config.botToken);
   const rate = Number(config.usdBynRate);
 
@@ -102,7 +107,58 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
     await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [] } }).catch(() => {});
   }
 
-  bot.command(["start", "new"], (ctx) => respond(ctx, withName({}, ctx), greeting()));
+  /** Поиск, который запустил собеседник: те же карточки, что и после кнопок. */
+  async function searchFor(ctx: Context, params: SearchParams) {
+    const chatId = ctx.chat!.id;
+    store.setDialog(chatId, { ...fromParams(params), talking: true }, null);
+    const searchId = store.addSearch(chatId, describeParams(params), params);
+    enqueue(store, bridge, { id: searchId, chat_id: chatId, params }, false);
+    if (!bridge.connected) await ctx.reply("🔴 Браузер сейчас не в сети. Откройте Chrome — поиск начнётся автоматически.");
+  }
+
+  // Разговор с собеседником: по очереди в каждом чате, но не задерживая остальные чаты
+  const talks = new Map<number, Promise<void>>();
+  function talk(ctx: Context, text: string) {
+    const chatId = ctx.chat!.id;
+    const run = async () => {
+      const typing = setInterval(() => ctx.replyWithChatAction("typing").catch(() => {}), 4500);
+      await ctx.replyWithChatAction("typing").catch(() => {});
+      try {
+        const chat = store.chat(chatId);
+        const context = chat.draft.deal ? describeParams(toParams(chat.draft)) : "";
+        const r = await agent!.reply(chatId, text, context);
+        // Дальше уточнения — тоже собеседнику; вопрос кнопками, если был, снимаем.
+        // Запоминаем, о чём шла речь: нажмёт кнопки — продолжим в том же городе, а не в Минске
+        const base = r.query ? fromParams(r.query) : store.chat(chatId).draft;
+        store.setDialog(chatId, { ...base, talking: true }, null);
+        // Своя карта: по https — внутри Telegram, по http — ссылкой в браузер
+        const reply_markup = r.map
+          ? r.map.startsWith("https://")
+            ? new InlineKeyboard().webApp("🗺 Открыть карту", r.map)
+            : new InlineKeyboard().url("🗺 Открыть карту", r.map)
+          : undefined;
+        await ctx.reply(agentHtml(r.text), { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup });
+        if (r.search) await searchFor(ctx, r.search);
+        if (r.contact) {
+          const { draft, reply } = startContact(store.lastSearch(chatId)?.params ?? null, ctx.from?.first_name);
+          await respond(ctx, draft, reply);
+        }
+      } catch (e) {
+        console.error("[agent]", e);
+        await ctx.reply("⚠️ Не получилось ответить. Попробуйте ещё раз чуть позже или нажмите /new.").catch(() => {});
+      } finally {
+        clearInterval(typing);
+      }
+    };
+    const next = (talks.get(chatId) ?? Promise.resolve()).then(run);
+    talks.set(chatId, next);
+    void next.finally(() => talks.get(chatId) === next && talks.delete(chatId));
+  }
+
+  bot.command(["start", "new"], (ctx) => {
+    store.clearTalk(ctx.chat.id);
+    return respond(ctx, withName({}, ctx), greeting());
+  });
   bot.command("help", (ctx) => ctx.reply(HELP, { parse_mode: "HTML" }));
 
   bot.command("status", (ctx) =>
@@ -138,7 +194,8 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
   // Ответ на вопрос кнопкой
   bot.callbackQuery(/^d:/, async (ctx) => {
     const chat = store.chat(ctx.chat!.id);
-    const result = onChoice(withName(chat.draft, ctx), ctx.callbackQuery.data);
+    // Нажал кнопку — снова ведут правила
+    const result = onChoice(withName({ ...chat.draft, talking: false }, ctx), ctx.callbackQuery.data);
     if (!result) {
       // «Готово» без отметок — подсказываем и оставляем кнопки
       const done = ctx.callbackQuery.data.endsWith(":done");
@@ -151,7 +208,7 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
   // Отметка варианта (несколько ответов): обновляем ✅ на том же сообщении
   bot.callbackQuery(/^t:/, async (ctx) => {
     const chat = store.chat(ctx.chat!.id);
-    const result = onToggle(chat.draft, ctx.callbackQuery.data);
+    const result = onToggle({ ...chat.draft, talking: false }, ctx.callbackQuery.data);
     await ctx.answerCallbackQuery().catch(() => {});
     if (!result) return;
     store.setDialog(ctx.chat!.id, result.draft, chat.step);
@@ -198,6 +255,8 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
     const chat = store.chat(ctx.chat.id);
     const last = store.lastSearch(ctx.chat.id);
     const { draft, reply } = onText(withName(chat.draft, ctx), chat.step, text, rate, last?.params ?? null);
+    // Вопросы и то, чего правила не поняли, — собеседнику; ответы анкеты и контакты — правилам
+    if (agent && wantsAgent(chat.draft, chat.step, reply, text)) return talk(ctx, text);
     await respond(ctx, draft, reply);
   });
 

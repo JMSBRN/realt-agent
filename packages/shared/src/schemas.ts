@@ -1,9 +1,24 @@
 import { z } from "zod/v4";
 
-/** Параметры поиска квартиры. */
+export const DEALS = ["sale", "rent", "rent_day"] as const;
+export type Deal = (typeof DEALS)[number];
+
+export const PROPERTY_TYPES = [
+  "flat", "room", "house", "dacha", "plot", "office", "shop", "warehouse", "business", "newbuild",
+] as const;
+export type PropertyType = (typeof PROPERTY_TYPES)[number];
+
+export const PlaceSchema = z.object({
+  title: z.string(),
+  address: z.record(z.string(), z.string()).nullable(),
+});
+
+/** Параметры поиска. type и place — необязательны: старые поиски — квартиры в городе city. */
 export const SearchParamsSchema = z.object({
-  deal: z.enum(["sale", "rent"]).describe("sale — купить, rent — снять на длительный срок"),
-  city: z.string().describe("Город в именительном падеже, например «Минск»"),
+  deal: z.enum(DEALS).describe("sale — купить, rent — снять на длительный срок, rent_day — на сутки"),
+  type: z.enum(PROPERTY_TYPES).optional(),
+  city: z.string().describe("Название места для людей, например «Минск»"),
+  place: PlaceSchema.optional(),
   rooms: z.array(z.number().int().min(1).max(5)).describe("Допустимое число комнат; пустой массив — любое"),
   priceMinUsd: z.number().nullable().describe("Минимальная цена в долларах США или null"),
   priceMaxUsd: z.number().nullable().describe("Максимальная цена в долларах США или null"),
@@ -43,6 +58,11 @@ export const ListingSchema = z.object({
   // координаты для карты; optional — чтобы старые версии расширения не ломали проверку
   lat: z.number().nullable().optional(),
   lon: z.number().nullable().optional(),
+  town: z.string().nullable().optional(),
+  pricePerM2Usd: z.number().nullable().optional(),
+  areaLand: z.number().nullable().optional(),
+  /** Новостройки: срок сдачи («4 кв. 2026»). */
+  ready: z.string().nullable().optional(),
 });
 export type Listing = z.infer<typeof ListingSchema>;
 
@@ -62,3 +82,37 @@ export const TaskResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("failed"), error: z.string().max(2000) }),
 ]);
 export type TaskResult = z.infer<typeof TaskResultSchema>;
+
+/**
+ * Быстрый запрос к сайту: «сколько однушек в Гомеле», «какие новостройки», «какой uuid у Мозыря».
+ * Расширение открывает адреса по очереди до первой существующей страницы, читает общее число
+ * объявлений и до maxPages страниц выдачи; filter — наши фильтры (цена, площадь…), которых нет у сайта.
+ */
+export interface ProbePayload {
+  urls: string[];
+  maxPages: number;
+  /** Раздел сайта — чтобы собрать ссылки на объекты. */
+  listPath: string;
+  filter?: SearchParams | null;
+}
+
+export const ProbeResultSchema = z.discriminatedUnion("status", [
+  z.object({
+    status: z.literal("done"),
+    url: z.string(),
+    /** Место, которое понял сайт: название и фильтр addressV2. */
+    geoTitle: z.string().nullable(),
+    address: z.record(z.string(), z.string()).nullable(),
+    /** Всего объявлений по фильтрам сайта. */
+    totalCount: z.number(),
+    /** Сколько просмотрели и сколько из них прошло наши фильтры. */
+    scanned: z.number(),
+    matched: z.number(),
+    minPriceUsd: z.number().nullable(),
+    items: z.array(ListingSchema).max(60),
+  }),
+  z.object({ status: z.literal("notfound") }),
+  z.object({ status: z.literal("captcha") }),
+  z.object({ status: z.literal("failed"), error: z.string().max(2000) }),
+]);
+export type ProbeResult = z.infer<typeof ProbeResultSchema>;
