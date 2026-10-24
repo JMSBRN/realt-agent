@@ -10,6 +10,7 @@ import {
   onChoice,
   onContact,
   onText,
+  onToggle,
   question,
   startContact,
   type Draft,
@@ -136,10 +137,26 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
 
   // Ответ на вопрос кнопкой
   bot.callbackQuery(/^d:/, async (ctx) => {
-    await closeButtons(ctx);
     const chat = store.chat(ctx.chat!.id);
     const result = onChoice(withName(chat.draft, ctx), ctx.callbackQuery.data);
-    if (result) await respond(ctx, result.draft, result.reply);
+    if (!result) {
+      // «Готово» без отметок — подсказываем и оставляем кнопки
+      const done = ctx.callbackQuery.data.endsWith(":done");
+      return ctx.answerCallbackQuery(done ? "Отметьте хотя бы один вариант или нажмите «Не важно»" : undefined);
+    }
+    await closeButtons(ctx);
+    await respond(ctx, result.draft, result.reply);
+  });
+
+  // Отметка варианта (несколько ответов): обновляем ✅ на том же сообщении
+  bot.callbackQuery(/^t:/, async (ctx) => {
+    const chat = store.chat(ctx.chat!.id);
+    const result = onToggle(chat.draft, ctx.callbackQuery.data);
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (!result) return;
+    store.setDialog(ctx.chat!.id, result.draft, chat.step);
+    const keyboard = InlineKeyboard.from(result.buttons.map((r) => r.map((b) => InlineKeyboard.text(b.text, b.data))));
+    await ctx.editMessageReplyMarkup({ reply_markup: keyboard }).catch(() => {});
   });
 
   // Кнопки после выдачи: изменить бюджет, комнаты, следить, новый поиск, поднять бюджет
@@ -150,6 +167,13 @@ export function createBot(store: Store, bridge: ExtensionBridge, onLead: LeadHan
     if (action === "watch") return watchLast(ctx);
 
     const last = store.lastSearch(ctx.chat!.id);
+    if (action === "retry" && last) {
+      enqueue(store, bridge, last, false);
+      return ctx.reply(
+        `🔁 Повторяю поиск: ${describeParams(last.params)}` +
+          (bridge.connected ? " ⏳" : "\n\n🔴 Браузер сейчас не в сети. Откройте Chrome — поиск начнётся автоматически."),
+      );
+    }
     if (action === "contact") {
       const { draft, reply } = startContact(last?.params ?? null, ctx.from?.first_name);
       return respond(ctx, draft, reply);

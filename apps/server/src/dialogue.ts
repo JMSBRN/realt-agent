@@ -4,6 +4,7 @@ import { describeParams } from "./format.ts";
 import {
   CALL_TIMES,
   CONTACT_KEYS,
+  EXCLUSIVE,
   PROFILE_QUESTIONS,
   normalizeEmail,
   normalizePhone,
@@ -43,6 +44,8 @@ export interface Draft {
   contactOnly?: boolean;
   /** Имя из профиля Telegram — подсказка на вопрос «как к вам обращаться». */
   tgName?: string;
+  /** Отмеченные варианты в вопросе с несколькими ответами (до нажатия «Готово»). */
+  pick?: { step: Step; selected: number[] };
 }
 
 export interface Button {
@@ -146,13 +149,48 @@ function grid(buttons: Button[]): Button[][] {
   return rows;
 }
 
+const ROOM_OPTIONS = ["1", "2", "3", "4+"];
+const roomsOf = (i: number) => (i === 3 ? [4, 5] : [i + 1]);
+
+/** Варианты для выбора нескольких: отмеченные — с ✅; «Не важно» и т.п. срабатывают сразу. */
+function multiButtons(step: Step, options: string[], d: Draft): Button[] {
+  const selected = d.pick?.step === step ? d.pick.selected : [];
+  return options.map((text, i) =>
+    EXCLUSIVE.test(text)
+      ? { text, data: `d:${step}:${i}` }
+      : { text: (selected.includes(i) ? "✅ " : "") + text, data: `t:${step}:${i}` },
+  );
+}
+
+const MULTI_HINT = "\n\n☑️ Можно отметить несколько вариантов, затем нажмите «Готово».";
+
+/** Варианты ответа на вопрос с несколькими ответами (для кнопок «Готово»). */
+function multiOptions(step: Step, d: Draft): string[] | null {
+  if (step === "rooms") return ROOM_OPTIONS;
+  if (step === "c_time") return CALL_TIMES;
+  const pq = profileQuestion(step);
+  return pq?.multi ? pq.options(d.deal) : null;
+}
+
 export function question(step: Step, d: Draft): Pick<Reply, "text" | "buttons" | "contactRequest"> {
   const pq = profileQuestion(step);
   if (pq) {
-    const options = pq.options(d.deal).map((text, i) => ({ text, data: `d:${step}:${i}` }));
+    const options = pq.options(d.deal);
+    if (pq.multi) {
+      const buttons = multiButtons(step, options, d);
+      const exclusive = buttons.filter((b) => b.data.startsWith("d:"));
+      return {
+        text: pq.text(d.deal) + MULTI_HINT,
+        buttons: [
+          ...grid(buttons.filter((b) => b.data.startsWith("t:"))),
+          row(["Готово ➡️", `d:${step}:done`]),
+          [...exclusive, { text: pq.skip ?? "Пропустить", data: `d:${step}:skip` }],
+        ],
+      };
+    }
     return {
       text: pq.text(d.deal),
-      buttons: [...grid(options), row([pq.skip ?? "Пропустить", `d:${step}:skip`])],
+      buttons: [...grid(options.map((text, i) => ({ text, data: `d:${step}:${i}` }))), row([pq.skip ?? "Пропустить", `d:${step}:skip`])],
     };
   }
 
@@ -172,11 +210,8 @@ export function question(step: Step, d: Draft): Pick<Reply, "text" | "buttons" |
       };
     case "rooms":
       return {
-        text: "Сколько комнат рассматриваете?",
-        buttons: [
-          row(["1", "d:rooms:1"], ["2", "d:rooms:2"], ["3", "d:rooms:3"], ["4+", "d:rooms:4+"]),
-          row(["Не важно", "d:rooms:any"]),
-        ],
+        text: "Сколько комнат рассматриваете?" + MULTI_HINT,
+        buttons: [multiButtons("rooms", ROOM_OPTIONS, d), row(["Готово ➡️", "d:rooms:done"], ["Не важно", "d:rooms:any"])],
       };
     case "budget":
       return d.deal === "rent"
@@ -243,11 +278,16 @@ export function question(step: Step, d: Draft): Pick<Reply, "text" | "buttons" |
         text: "Где вам удобнее переписываться? Напишите Viber, WhatsApp, Instagram или ссылку на профиль.",
         buttons: [row(["Telegram — здесь", "d:c_social:tg"], ["Пропустить", "d:c_social:skip"])],
       };
-    case "c_time":
+    case "c_time": {
+      const buttons = multiButtons("c_time", CALL_TIMES, d);
       return {
-        text: "Когда удобно принять звонок?",
-        buttons: grid(CALL_TIMES.map((t, i) => ({ text: t, data: `d:c_time:${i}` }))),
+        text: "Когда удобно принять звонок?" + MULTI_HINT,
+        buttons: [
+          buttons.filter((b) => b.data.startsWith("t:")),
+          [{ text: "Готово ➡️", data: "d:c_time:done" }, ...buttons.filter((b) => b.data.startsWith("d:"))],
+        ],
       };
+    }
   }
   throw new Error(`unknown step ${step}`);
 }
@@ -483,7 +523,8 @@ export function onText(
   if (step && !isCore(step) && step !== "mode") {
     const answered = answerStep(d, step, text, rate);
     if (answered && typeof answered === "object") {
-      return { draft: answered.draft, reply: advance(answered.draft, [answered.ack], step) };
+      const draft = { ...answered.draft, pick: undefined };
+      return { draft, reply: advance(draft, [answered.ack], step) };
     }
     const q = question(step, d);
     const hint = typeof answered === "string" ? answered : "Не совсем понял 🙂 " + q.text;
@@ -524,10 +565,38 @@ export function onContact(d: Draft, phone: string): { draft: Draft; reply: Reply
   return { draft, reply: advance(draft, ["Номер записал ✅"], "c_phone") };
 }
 
-/** Нажатие кнопки ответа (data вида «d:budget:60000-90000», «d:p_pets:1»). */
+/** Отметка варианта в вопросе с несколькими ответами (data «t:p_nearby:2»). Возвращает обновлённые кнопки. */
+export function onToggle(d: Draft, data: string): { draft: Draft; buttons: Button[][] } | null {
+  const [, step, value] = data.split(":") as [string, Step, string];
+  const i = Number(value);
+  if (!multiOptions(step, d) || !Number.isInteger(i)) return null;
+  const selected = d.pick?.step === step ? d.pick.selected : [];
+  const next = selected.includes(i) ? selected.filter((x) => x !== i) : [...selected, i].sort();
+  const draft: Draft = { ...d, pick: { step, selected: next } };
+  return { draft, buttons: question(step, draft).buttons ?? [] };
+}
+
+/** «Готово» в вопросе с несколькими ответами: применяет отмеченное. null — ничего не отмечено. */
+function applyPicked(d: Draft, step: Step): { draft: Draft; reply: Reply } | null {
+  const options = multiOptions(step, d);
+  const selected = d.pick?.step === step ? d.pick.selected : [];
+  if (!options || !selected.length) return null;
+  let draft: Draft = { ...d, pick: undefined };
+  if (step === "rooms") {
+    draft.rooms = [...new Set(selected.flatMap(roomsOf))].sort();
+    return { draft, reply: advance(draft, [ack("rooms", draft)], step) };
+  }
+  const text = selected.map((i) => options[i]).filter(Boolean).join(", ");
+  if (step === "c_time") draft = setContact(draft, "time", text);
+  else draft = setProfile(draft, profileQuestion(step)!.key, text);
+  return { draft, reply: advance(draft, [], step) };
+}
+
+/** Нажатие кнопки ответа (data вида «d:budget:60000-90000», «d:p_pets:1», «d:rooms:done»). */
 export function onChoice(d: Draft, data: string): { draft: Draft; reply: Reply } | null {
   const [, key, value] = data.split(":") as [string, Step, string];
-  let draft = { ...d };
+  if (value === "done") return applyPicked(d, key);
+  let draft: Draft = { ...d, pick: undefined };
   const any = value === "any";
 
   const pq = profileQuestion(key);
@@ -535,6 +604,11 @@ export function onChoice(d: Draft, data: string): { draft: Draft; reply: Reply }
     const options = pq.options(d.deal);
     draft = setProfile(draft, pq.key, value === "skip" ? "" : (options[Number(value)] ?? ""));
     return { draft, reply: advance(draft, [], key) };
+  }
+  if (key === "rooms" && /^\d$/.test(value)) {
+    // одна кнопка-цифра (из старых сообщений) — сразу ответ
+    draft.rooms = roomsOf(Number(value) - 1);
+    return { draft, reply: advance(draft, [ack("rooms", draft)], key) };
   }
 
   switch (key) {
@@ -550,6 +624,9 @@ export function onChoice(d: Draft, data: string): { draft: Draft; reply: Reply }
     case "rooms":
       draft.rooms = any ? [] : value === "4+" ? [4, 5] : [Number(value)];
       break;
+    case "c_time":
+      draft = setContact(draft, "time", CALL_TIMES[Number(value)] ?? "");
+      return { draft, reply: advance(draft, [], key) };
     case "budget": {
       const [min, max] = (value ?? "").split("-");
       draft.budget = any ? { min: null, max: null } : { min: min ? Number(min) : null, max: max ? Number(max) : null };
@@ -576,9 +653,6 @@ export function onChoice(d: Draft, data: string): { draft: Draft; reply: Reply }
       return { draft, reply: advance(draft, [], key) };
     case "c_social":
       draft = setContact(draft, "social", value === "tg" ? "Telegram" : "");
-      return { draft, reply: advance(draft, [], key) };
-    case "c_time":
-      draft = setContact(draft, "time", CALL_TIMES[Number(value)] ?? "");
       return { draft, reply: advance(draft, [], key) };
     default:
       return null;

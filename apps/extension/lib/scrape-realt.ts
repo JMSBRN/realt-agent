@@ -60,20 +60,47 @@ async function readRealtPage(): Promise<PageData> {
   };
 }
 
-function waitForComplete(tabId: number, timeoutMs = 45_000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const done = (fn: () => void) => {
-      clearTimeout(timer);
-      browser.tabs.onUpdated.removeListener(listener);
-      fn();
-    };
-    // проверяем адрес: about:blank, с которого стартует вкладка, тоже шлёт «complete»
-    const listener = (id: number, info: { status?: string }, tab: { url?: string }) => {
-      if (id === tabId && info.status === "complete" && tab.url?.startsWith("https://realt.by/")) done(resolve);
-    };
-    const timer = setTimeout(() => done(() => reject(new Error("page load timeout"))), timeoutMs);
-    browser.tabs.onUpdated.addListener(listener);
-  });
+const LOAD_TIMEOUT_MS = 60_000;
+
+/** Выполняется в странице: появились ли данные объявлений (и это уже новая страница, а не прошлая). */
+function pageReady(): boolean {
+  const w = window as unknown as { __realtAgentSeen?: boolean };
+  if (w.__realtAgentSeen) return false; // ещё показана прошлая страница
+  return document.readyState !== "loading" && (!!document.getElementById("__NEXT_DATA__") || document.readyState === "complete");
+}
+
+/** Помечает текущую страницу как прочитанную — чтобы после перехода не принять её за новую. */
+function markSeen() {
+  (window as unknown as { __realtAgentSeen?: boolean }).__realtAgentSeen = true;
+}
+
+/**
+ * Ждёт, пока на странице появятся данные объявлений. Полную загрузку («complete») не ждём:
+ * её могут бесконечно задерживать реклама и счётчики, а список объявлений приходит сразу с HTML.
+ */
+async function waitForData(tabId: number) {
+  const deadline = Date.now() + LOAD_TIMEOUT_MS;
+  let url = "";
+  let lastError = "";
+  while (Date.now() < deadline) {
+    await sleep(1000);
+    const tab = await browser.tabs.get(tabId);
+    url = tab.url ?? "";
+    if (!url.startsWith("https://realt.by/")) continue;
+    try {
+      const [r] = await browser.scripting.executeScript({ target: { tabId }, func: pageReady });
+      if (r?.result) return;
+      lastError = "";
+    } catch (e) {
+      // страница ещё переключается — или браузер показал свою страницу ошибки (нет сети, сайт недоступен)
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  console.warn("[realt] не дождались данных", url, lastError);
+  const reason = lastError
+    ? "страница не открылась — проверьте интернет и что realt.by открывается в Chrome"
+    : "сайт отвечает слишком медленно";
+  throw new Error(`realt.by не загрузился за минуту: ${reason}. (${url.slice(0, 80)}${lastError ? "; " + lastError.slice(0, 120) : ""})`);
 }
 
 /** Открывает выдачу realt.by в фоновой вкладке, листает страницы и возвращает подходящие объявления. */
@@ -91,9 +118,9 @@ export async function scrapeRealt({
 
   try {
     for (let page = 1; page <= maxPages; page++) {
-      const loaded = waitForComplete(tabId);
+      if (page > 1) await browser.scripting.executeScript({ target: { tabId }, func: markSeen }).catch(() => {});
       await browser.tabs.update(tabId, { url: buildRealtUrl(params, page) });
-      await loaded;
+      await waitForData(tabId);
       await sleep(rand(1500, 3500));
 
       const [injection] = await browser.scripting.executeScript({ target: { tabId }, func: readRealtPage });

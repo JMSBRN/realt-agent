@@ -1,17 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { onChoice, onContact, onText, startContact, type Draft, type Reply, type Step } from "./dialogue.ts";
+import { onChoice, onContact, onText, onToggle, question, startContact, type Draft, type Reply, type Step } from "./dialogue.ts";
 import { extract } from "./extract.ts";
 import { normalizeEmail, normalizePhone } from "./survey.ts";
 
 const RATE = 3;
 
-/** Прогоняет диалог: строки — текст клиента, «btn:…» — кнопка, «tel:…» — «Поделиться номером». */
+/**
+ * Прогоняет диалог: строки — текст клиента, «btn:…» — кнопка, «tel:…» — «Поделиться номером»,
+ * «tog:…» — отметка варианта (сообщение не меняется, ответа нет).
+ */
 function talk(messages: string[], start: Draft = {}, startStep: Step | null = null) {
   let draft: Draft = start;
   let step: Step | null = startStep;
   const replies: Reply[] = [];
   for (const m of messages) {
+    if (m.startsWith("tog:")) {
+      draft = onToggle(draft, m.slice(4))!.draft;
+      continue;
+    }
     const r: { draft: Draft; reply: Reply } = m.startsWith("btn:")
       ? onChoice(draft, m.slice(4))!
       : m.startsWith("tel:")
@@ -94,7 +101,9 @@ test("подробный режим: анкета риелтора, контак
     [
       "btn:d:mode:detailed",
       "btn:d:deal:sale",
-      "btn:d:rooms:2",
+      "tog:t:rooms:0",
+      "tog:t:rooms:1",
+      "btn:d:rooms:done",
       "btn:d:budget:60000-90000", // вилка, но в подробном режиме вопросы продолжаются
       "btn:d:area:any",
       "btn:d:floor:nf",
@@ -102,9 +111,14 @@ test("подробный режим: анкета риелтора, контак
       "btn:d:p_purpose:0", // для жизни
       "btn:d:p_household:2", // семья с детьми → вопросы про детей
       "двое, 5 и 9 лет",
-      "btn:d:p_school:2",
+      "tog:t:p_school:0",
+      "tog:t:p_school:1",
+      "btn:d:p_school:done",
       "btn:d:p_pets:2", // кошка
-      "рядом работа на Немиге",
+      "tog:t:p_nearby:0",
+      "tog:t:p_nearby:1",
+      "tog:t:p_nearby:0", // сняли отметку с «Метро»
+      "btn:d:p_nearby:done",
       "btn:d:p_renovation:0",
       "btn:d:p_building:skip",
       "тихий подъезд, лифт",
@@ -116,7 +130,9 @@ test("подробный режим: анкета риелтора, контак
       "+375 (29) 123-45-67",
       "anna@mail.ru",
       "Viber",
-      "btn:d:c_time:2",
+      "tog:t:c_time:0",
+      "tog:t:c_time:2",
+      "btn:d:c_time:done",
     ],
     { tgName: "Аня" },
   );
@@ -132,7 +148,8 @@ test("подробный режим: анкета риелтора, контак
   const final = r.at(-1)!;
   assert.equal(final.lead, true);
   assert.equal(final.search?.priceMaxUsd, 90000);
-  assert.match(final.text, /Спасибо, Анна! .* вечером/);
+  assert.match(final.text, /Спасибо, Анна! .* утром, вечером/);
+  assert.deepEqual(final.search?.rooms, [1, 2]);
   assert.equal(r[20]!.contactRequest, true); // на вопросе о телефоне — кнопка «Поделиться номером»
   assert.equal(r[21]!.removeKeyboard, true); // после ответа её убираем
 
@@ -140,9 +157,9 @@ test("подробный режим: анкета риелтора, контак
     purpose: "Для жизни",
     household: "Семья с детьми",
     kids: "двое, 5 и 9 лет",
-    school: "И школа, и садик",
+    school: "Школа, Детский сад",
     pets: "Кошка",
-    nearby: "рядом работа на Немиге",
+    nearby: "Парк / зелёная зона",
     renovation: "С ремонтом — заехать и жить",
     building: "",
     surroundings: "тихий подъезд, лифт",
@@ -156,8 +173,22 @@ test("подробный режим: анкета риелтора, контак
     phone: "+375291234567",
     email: "anna@mail.ru",
     social: "Viber",
-    time: "Вечером",
+    time: "Утром, Вечером",
   });
+});
+
+test("несколько ответов: отметки ✅, «Готово» без отметок не принимается, «Не важно» — сразу", () => {
+  let d: Draft = { mode: "quick", deal: "sale" };
+  assert.match(question("rooms", d).text, /несколько вариантов/);
+  d = onToggle(d, "t:rooms:1")!.draft;
+  const buttons = onToggle(d, "t:rooms:3")!.buttons;
+  assert.deepEqual(buttons[0]!.map((b) => b.text), ["1", "✅ 2", "3", "✅ 4+"]);
+  assert.equal(onChoice({ mode: "quick", deal: "sale" }, "d:rooms:done"), null);
+  assert.deepEqual(onChoice({ mode: "quick", deal: "sale" }, "d:rooms:any")!.draft.rooms, []);
+  // «Нет» у животных нельзя совместить с «Кошка» — оно срабатывает сразу
+  const pets = question("p_pets", { mode: "detailed", deal: "rent" }).buttons!.flat();
+  assert.equal(pets.find((b) => b.text === "Нет")!.data, "d:p_pets:0");
+  assert.equal(pets.find((b) => b.text === "Кошка")!.data, "t:p_pets:2");
 });
 
 test("аренда: без вопросов про ипотеку и тип дома, но со сроком аренды; без детей — без школы", () => {

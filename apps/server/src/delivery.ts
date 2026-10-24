@@ -51,7 +51,12 @@ export async function deliver(api: Api, store: Store, task: Task, result: TaskRe
   }
   if (result.status === "failed") {
     console.error(`[task] ${task.id} не удалась: ${result.error}`);
-    if (!task.only_new) await api.sendMessage(chatId, `⚠️ Поиск не удался: ${result.error.slice(0, 300)}`);
+    if (!task.only_new) {
+      const reason = result.error.replace(/^Error:\s*/, "").slice(0, 300);
+      await api.sendMessage(chatId, `⚠️ Поиск не удался: ${reason}`, {
+        reply_markup: new InlineKeyboard().text("🔁 Повторить поиск", "f:retry").text("🔄 Новый поиск", "f:new"),
+      });
+    }
     return;
   }
 

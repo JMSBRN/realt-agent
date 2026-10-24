@@ -33,7 +33,12 @@ export interface ProfileQuestion {
   applies?: (deal: Deal | undefined, profile: Partial<Record<ProfileKey, string>>) => boolean;
   /** Подпись кнопки «пропустить» */
   skip?: string;
+  /** Можно отметить несколько вариантов (кнопка «Готово»). */
+  multi?: boolean;
 }
+
+/** Варианты, которые нельзя совмещать с другими: срабатывают сразу. */
+export const EXCLUSIVE = /^(Не важно|Нет|В любое время)$/;
 
 const hasKids = (_: Deal | undefined, p: Partial<Record<ProfileKey, string>>) => /дет|ребен|ребён/i.test(p.household ?? "");
 
@@ -46,6 +51,7 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
       deal === "rent"
         ? ["Для себя", "Для семьи", "Для сотрудника / компании"]
         : ["Для жизни", "Инвестиция / сдавать", "Для детей или родителей"],
+    multi: true,
   },
   {
     key: "household",
@@ -64,8 +70,9 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     key: "school",
     column: "Школа / садик рядом",
     text: () => "Что важно рядом для детей?",
-    options: () => ["Школа", "Детский сад", "И школа, и садик", "Не важно"],
+    options: () => ["Школа", "Детский сад", "Спортивные секции", "Не важно"],
     applies: hasKids,
+    multi: true,
   },
   {
     key: "pets",
@@ -75,12 +82,14 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
         ? "Есть домашние животные? Многие хозяева против — учту это сразу."
         : "Есть домашние животные?",
     options: () => ["Нет", "Собака", "Кошка", "Другие"],
+    multi: true,
   },
   {
     key: "nearby",
     column: "Важно рядом",
     text: () => "Что обязательно должно быть рядом с домом? Если важно добираться до работы — напишите, где она.",
-    options: () => ["Метро", "Парк / зелёная зона", "Магазины, ТЦ", "Не важно"],
+    options: () => ["Метро", "Парк / зелёная зона", "Магазины, ТЦ", "Поликлиника", "Спортзал / бассейн", "Не важно"],
+    multi: true,
   },
   {
     key: "renovation",
@@ -90,6 +99,7 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
       deal === "rent"
         ? ["Свежий ремонт", "Обычное, жилое", "Не важно"]
         : ["С ремонтом — заехать и жить", "Под косметический ремонт", "Без отделки", "Не важно"],
+    multi: true,
   },
   {
     key: "building",
@@ -97,12 +107,14 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     text: () => "Новостройка или вторичное жильё?",
     options: () => ["Новостройка", "Вторичка", "Не важно"],
     applies: (deal) => deal !== "rent",
+    multi: true,
   },
   {
     key: "surroundings",
     column: "Дом и соседи",
     text: () => "Пожелания к дому и соседям? Можно своими словами: тихий подъезд, без шумных соседей, лифт…",
-    options: () => ["Тихий двор", "Парковка", "Охрана / консьерж", "Не важно"],
+    options: () => ["Тихий двор", "Парковка", "Охрана / консьерж", "Лифт", "Детская площадка", "Не важно"],
+    multi: true,
   },
   {
     key: "timeline",
@@ -116,6 +128,7 @@ export const PROFILE_QUESTIONS: ProfileQuestion[] = [
     text: () => "Как планируете оплату?",
     options: () => ["Наличные", "Ипотека / кредит", "Продажа своей квартиры", "Пока не решил(а)"],
     applies: (deal) => deal !== "rent",
+    multi: true,
   },
   {
     key: "term",
